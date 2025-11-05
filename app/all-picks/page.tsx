@@ -57,22 +57,21 @@ const AllPicksPage = () => {
         const { data: pickData } = await supabase.from("game_picks").select("*");
         setPicks(pickData || []);
 
-        // Determine current week based on Tuesday 5AM MT
-        const nowMT = new Date().toLocaleString("en-US", { timeZone: "America/Denver" });
-        const today = new Date(nowMT);
+        // SIMPLIFIED CURRENT WEEK CALCULATION
+        const nowUTC = new Date();
+        
+        // Find the current week based on games that haven't started yet
         const weekNumbers = Array.from(new Set(sortedGames.map((g) => g.week))).sort((a, b) => a - b);
-        let currentWeek = weekNumbers[0];
-        for (const week of weekNumbers) {
-          const weekGames = sortedGames.filter((g) => g.week === week);
-          if (!weekGames.length) continue;
-          const firstGame = new Date(weekGames[0].startTime);
-          const tuesday = new Date(firstGame);
-          const day = tuesday.getDay();
-          const diffToTuesday = (day <= 2 ? 2 - day : 9 - day);
-          tuesday.setDate(tuesday.getDate() + diffToTuesday);
-          tuesday.setHours(5, 0, 0, 0);
-          if (today >= tuesday) currentWeek = week;
-        }
+        
+        // Find the first week that has games in the future
+        const upcomingWeek = weekNumbers.find(week => {
+          const weekGames = sortedGames.filter(g => g.week === week);
+          return weekGames.some(game => new Date(game.startTime) > nowUTC);
+        });
+
+        // If no upcoming games, use the latest week
+        const currentWeek = upcomingWeek ?? Math.max(...weekNumbers);
+        
         setActiveWeek(currentWeek);
         setLoading(false);
       } catch (err) {
@@ -90,9 +89,8 @@ const AllPicksPage = () => {
   }, []);
 
   const isLocked = (isoDate: string) => {
-    const gameET = new Date(isoDate);
-    const gameMT = new Date(gameET.getTime() - 2 * 60 * 60 * 1000);
-    return now.getTime() >= gameMT.getTime();
+    const gameTime = new Date(isoDate);
+    return now.getTime() >= gameTime.getTime();
   };
 
   const formatGameLabel = (game: Game) => `${game.awayTeam} @ ${game.homeTeam}`;
@@ -102,6 +100,23 @@ const AllPicksPage = () => {
     if (!gamesByWeek[g.week]) gamesByWeek[g.week] = [];
     gamesByWeek[g.week].push(g);
   });
+
+  // Get current week for display
+  const getCurrentWeekDisplay = () => {
+    if (!activeWeek) return null;
+    
+    const weekGames = gamesByWeek[activeWeek] || [];
+    const hasUpcomingGames = weekGames.some(game => new Date(game.startTime) > now);
+    const hasLiveGames = weekGames.some(game => {
+      const gameTime = new Date(game.startTime);
+      const threeHoursLater = new Date(gameTime.getTime() + 3 * 60 * 60 * 1000);
+      return now >= gameTime && now <= threeHoursLater;
+    });
+
+    if (hasUpcomingGames) return `Week ${activeWeek} (Current)`;
+    if (hasLiveGames) return `Week ${activeWeek} (Live)`;
+    return `Week ${activeWeek} (Completed)`;
+  };
 
   if (loading) return <div className="p-6 text-lg">Loading all picks...</div>;
 
@@ -126,21 +141,40 @@ const AllPicksPage = () => {
         <h1 className="text-3xl font-bold text-gray-800">All Player Picks</h1>
       </div>
 
-      {/* Week tabs - IMPROVED CONTRAST */}
+      {/* Current Week Display */}
+      {activeWeek && (
+        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <h2 className="text-xl font-semibold text-blue-800">
+            {getCurrentWeekDisplay()}
+          </h2>
+        </div>
+      )}
+
+      {/* Week tabs */}
       <div className="flex gap-2 mb-6 overflow-x-auto">
-        {Object.keys(gamesByWeek).map((week) => (
-          <button
-            key={week}
-            onClick={() => setActiveWeek(Number(week))}
-            className={`px-4 py-2 rounded font-semibold transition-colors ${
-              activeWeek === Number(week) 
-                ? "bg-blue-600 text-white" 
-                : "bg-blue-100 text-blue-800 hover:bg-blue-200 border border-blue-300"
-            }`}
-          >
-            Week {week}
-          </button>
-        ))}
+        {Object.keys(gamesByWeek).map((week) => {
+          const weekNum = Number(week);
+          const weekGames = gamesByWeek[weekNum] || [];
+          const hasUpcomingGames = weekGames.some(game => new Date(game.startTime) > now);
+          const isCurrentWeek = activeWeek === weekNum;
+          
+          return (
+            <button
+              key={week}
+              onClick={() => setActiveWeek(weekNum)}
+              className={`px-4 py-2 rounded font-semibold transition-colors min-w-[100px] ${
+                isCurrentWeek 
+                  ? "bg-blue-600 text-white border-2 border-blue-700" 
+                  : hasUpcomingGames 
+                    ? "bg-green-100 text-green-800 border border-green-300 hover:bg-green-200"
+                    : "bg-gray-100 text-gray-700 border border-gray-300 hover:bg-gray-200"
+              }`}
+            >
+              Week {week}
+              {hasUpcomingGames && " ⏱️"}
+            </button>
+          );
+        })}
       </div>
 
       {activeWeek && (
@@ -212,7 +246,7 @@ const AllPicksPage = () => {
         </div>
       )}
 
-      {/* Legend - IMPROVED CONTRAST */}
+      {/* Legend */}
       <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
         <h3 className="font-semibold text-blue-900 mb-3 text-lg">How it works:</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
@@ -237,8 +271,8 @@ const AllPicksPage = () => {
             <span className="text-gray-800 font-medium">No pick made</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded border border-gray-300 font-medium">❓</span>
-            <span className="text-gray-800 font-medium">Pick not visible yet</span>
+            <span className="bg-green-100 text-green-800 px-2 py-1 rounded border border-green-300 font-medium">⏱️</span>
+            <span className="text-gray-800 font-medium">Week with upcoming games</span>
           </div>
         </div>
       </div>
