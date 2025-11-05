@@ -107,10 +107,9 @@ const AllPicksPage = () => {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      {/* Header with Home and Make Picks links - UPDATED WITH HOME BUTTON */}
+      {/* Header with Home and Make Picks links */}
       <div className="flex justify-between items-center mb-6 flex-wrap gap-4">
         <div className="flex items-center gap-4">
-          {/* HOME BUTTON ADDED HERE */}
           <Link 
             href="/" 
             className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 transition-colors"
@@ -127,14 +126,16 @@ const AllPicksPage = () => {
         <h1 className="text-3xl font-bold">All Player Picks</h1>
       </div>
 
-      {/* Week tabs */}
+      {/* Week tabs - UPDATED WITH BLUE STYLING */}
       <div className="flex gap-2 mb-6 overflow-x-auto">
         {Object.keys(gamesByWeek).map((week) => (
           <button
             key={week}
             onClick={() => setActiveWeek(Number(week))}
-            className={`px-4 py-2 rounded ${
-              activeWeek === Number(week) ? "bg-blue-500 text-white" : "bg-gray-200"
+            className={`px-4 py-2 rounded font-semibold transition-colors ${
+              activeWeek === Number(week) 
+                ? "bg-blue-500 text-white" 
+                : "bg-blue-100 text-blue-700 hover:bg-blue-200"
             }`}
           >
             Week {week}
@@ -174,7 +175,7 @@ const AllPicksPage = () => {
                 })}
               </tr>
 
-              {/* Player picks */}
+              {/* Player picks - UPDATED TO HIDE PICKS UNTIL LOCKED */}
               {profiles.map((user) => (
                 <tr key={user.user_id} className="hover:bg-gray-50">
                   <td className="border p-2 font-semibold">{user.email}</td>
@@ -183,14 +184,22 @@ const AllPicksPage = () => {
                     const userPick = picks.find(
                       (p) => p.user_id === user.user_id && p.game_id === game.id
                     );
+                    
+                    // Only show pick if game is locked
+                    const displayPick = locked ? (userPick?.selected_team ?? "") : "❓";
+                    
                     return (
                       <td
                         key={game.id}
-                        className={`border p-2 text-center ${
-                          locked ? "bg-red-100" : "bg-green-100"
+                        className={`border p-2 text-center font-medium ${
+                          locked 
+                            ? userPick 
+                              ? "bg-green-100 text-green-800"
+                              : "bg-red-100 text-red-800"
+                            : "bg-gray-100 text-gray-500"
                         }`}
                       >
-                        {userPick?.selected_team ?? ""}
+                        {displayPick}
                       </td>
                     );
                   })}
@@ -200,6 +209,33 @@ const AllPicksPage = () => {
           </table>
         </div>
       )}
+
+      {/* Legend */}
+      <div className="mt-6 p-4 bg-blue-50 rounded-lg">
+        <h3 className="font-semibold text-blue-800 mb-2">How it works:</h3>
+        <div className="flex flex-wrap gap-4 text-sm">
+          <div className="flex items-center gap-2">
+            <span className="inline-block w-3 h-3 rounded-full bg-green-300"></span>
+            <span>Pick available (game hasn't started)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="inline-block w-3 h-3 rounded-full bg-red-500"></span>
+            <span>Pick locked (game started)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-gray-500">❓</span>
+            <span>Pick hidden until game starts</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="bg-green-100 text-green-800 px-2 py-1 rounded">Team</span>
+            <span>Pick made</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="bg-red-100 text-red-800 px-2 py-1 rounded">Empty</span>
+            <span>No pick made</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
