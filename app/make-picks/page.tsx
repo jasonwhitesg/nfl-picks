@@ -14,7 +14,7 @@ type Game = {
   home_score?: number | null;
   away_score?: number | null;
   winner?: string | null;
-  status?: string | null; // Scheduled | InProgress | Final
+  status?: string | null;
 };
 
 type Picks = Record<string, string | null>;
@@ -23,14 +23,24 @@ const MakePicksPage = () => {
   const router = useRouter();
   const [games, setGames] = useState<Game[]>([]);
   const [picks, setPicks] = useState<Picks>({});
-  const [now, setNow] = useState(new Date());
+  const [now, setNow] = useState<Date>(getNowMST());
   const [activeWeek, setActiveWeek] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
-  const [mondayTotal, setMondayTotal] = useState<number | null>(null);
 
-  // ---- Auth check ----
+  function getNowMST(): Date {
+    return new Date(
+      new Date().toLocaleString("en-US", { timeZone: "America/Denver" })
+    );
+  }
+
+  // Update now every second for real-time countdown
+  useEffect(() => {
+    const interval = setInterval(() => setNow(getNowMST()), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     const checkAuth = async () => {
       const { data } = await supabase.auth.getSession();
@@ -38,88 +48,95 @@ const MakePicksPage = () => {
         router.push("/login");
         return;
       }
-
       setUserEmail(data.session.user.email || null);
-
       const { data: profile, error } = await supabase
         .from("profiles")
         .select("user_id")
         .eq("email", data.session.user.email)
         .single();
-
-      if (error) {
-        console.error("Error fetching profile:", error.message);
-        return;
-      }
-
-      setUserId(profile.user_id);
+      if (!error) setUserId(profile.user_id);
       setLoading(false);
     };
-
     checkAuth();
   }, [router]);
 
-  // ---- Fetch picks ----
   useEffect(() => {
     if (!userId) return;
-
     const fetchPicks = async () => {
       const { data, error } = await supabase
         .from("game_picks")
         .select("game_id, selected_team")
         .eq("user_id", userId);
-
-      if (error) {
-        console.error("Error fetching picks:", error.message);
-        return;
+      if (!error && data) {
+        const picksMap: Picks = {};
+        data.forEach((p: any) => (picksMap[p.game_id] = p.selected_team));
+        setPicks(picksMap);
       }
-
-      const picksMap: Picks = {};
-      data?.forEach((p: any) => (picksMap[p.game_id] = p.selected_team));
-      setPicks(picksMap);
     };
-
     fetchPicks();
   }, [userId]);
 
-  // ---- Fetch games ----
-  useEffect(() => {
-    const fetchGames = async () => {
-      const { data, error } = await supabase
-        .from("games")
-        .select("*")
-        .order("start_time", { ascending: true });
+  const fetchGames = async () => {
+    const { data, error } = await supabase
+      .from("games")
+      .select("*")
+      .order("start_time", { ascending: true });
 
-      if (error) {
-        console.error("Error fetching games:", error.message);
-        return;
+    if (error) {
+      console.error("Error fetching games:", error.message);
+      return;
+    }
+
+    const mapped: Game[] = data.map((g: any) => {
+      let status = g.status;
+      let winner = g.winner;
+      const estDate = new Date(g.start_time);
+      const mstDate = new Date(estDate.getTime() - 2 * 60 * 60 * 1000); // EST → MST
+
+      // Determine game status and winner if not already set
+      if (!status) {
+        const gameTime = new Date(g.start_time);
+        if (g.home_score != null && g.away_score != null) {
+          status = "Final";
+          winner = g.home_score > g.away_score ? g.team_a : g.team_b;
+        } else if (gameTime <= getNowMST()) {
+          status = "InProgress";
+        } else {
+          status = "Scheduled";
+        }
       }
 
-      const mapped: Game[] = data.map((g: any) => ({
+      return {
         id: g.id,
         week: g.week,
-        homeTeam: g.team_b,
-        awayTeam: g.team_a,
-        start_time: g.start_time,
+        homeTeam: g.team_a,
+        awayTeam: g.team_b,
+        start_time: mstDate.toISOString(),
         home_score: g.home_score,
         away_score: g.away_score,
-        winner: g.winner,
-        status: g.status,
-      }));
+        winner,
+        status,
+      };
+    });
 
-      setGames(mapped);
+    setGames(mapped);
 
-      // default to current week
-      const currentWeek =
-        [...new Set(mapped.map((g) => g.week))].sort((a, b) => a - b)[0] ?? 1;
-      setActiveWeek(currentWeek);
-    };
+    const upcomingWeek = [...new Set(mapped.map((g) => g.week))]
+      .sort((a, b) => a - b)
+      .find((w) =>
+        mapped.some(
+          (g) => g.week === w && new Date(g.start_time) > getNowMST()
+        )
+      );
 
+    setActiveWeek(upcomingWeek ?? Math.max(...mapped.map((g) => g.week)));
+  };
+
+  useEffect(() => {
     fetchGames();
+    const interval = setInterval(fetchGames, 180000);
+    return () => clearInterval(interval);
   }, []);
-
-  // ---- Utility functions ----
-  const isLocked = (isoDate: string) => new Date(isoDate) <= now;
 
   const formatTime = (iso: string) =>
     new Date(iso).toLocaleString("en-US", {
@@ -134,56 +151,59 @@ const MakePicksPage = () => {
 
   const getCountdown = (iso: string) => {
     const diff = new Date(iso).getTime() - now.getTime();
-    if (diff <= 0) return "";
+    if (diff <= 0) return "Game started";
     const hours = Math.floor(diff / (1000 * 60 * 60));
     const mins = Math.floor((diff / (1000 * 60)) % 60);
-    return `${hours}h ${mins}m`;
+    const secs = Math.floor((diff / 1000) % 60);
+    return `${hours}h ${mins}m ${secs}s`;
   };
+
+  const isLocked = (isoDate: string) => new Date(isoDate) <= now;
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push("/login");
   };
 
-  // ---- Select a team ----
   const selectPick = async (gameId: string, team: string, lockTime: string) => {
     if (isLocked(lockTime)) {
-      alert("This game is locked.");
+      alert("This game is locked. You cannot change your pick.");
       return;
     }
 
+    // Update local state immediately for better UX
     setPicks((prev) => ({ ...prev, [gameId]: team }));
 
     if (!userId) return;
 
-    await supabase
-      .from("game_picks")
-      .upsert({
-        user_id: userId,
-        game_id: gameId,
-        selected_team: team,
-        lock_time: lockTime,
-      });
+    try {
+      // Use upsert to update existing pick or create new one
+      const { error } = await supabase
+        .from("game_picks")
+        .upsert({
+          user_id: userId,
+          game_id: gameId,
+          selected_team: team,
+          lock_time: lockTime,
+          is_locked: false
+        }, {
+          onConflict: 'user_id,game_id'
+        });
+
+      if (error) {
+        console.error("Error saving pick:", error);
+        // Revert local state if there was an error
+        setPicks((prev) => ({ ...prev, [gameId]: picks[gameId] }));
+        alert("Error saving your pick. Please try again.");
+      }
+    } catch (err) {
+      console.error("Error saving pick:", err);
+      // Revert local state if there was an error
+      setPicks((prev) => ({ ...prev, [gameId]: picks[gameId] }));
+      alert("Error saving your pick. Please try again.");
+    }
   };
 
-  // ---- Save Monday total ----
-  const saveMondayTotal = async () => {
-    if (!userId || mondayTotal === null) return;
-    const mondayGame = games.find(
-      (g) => g.week === activeWeek && new Date(g.start_time).getDay() === 1
-    );
-    if (!mondayGame) return;
-
-    await supabase.from("monday_totals").upsert({
-      user_id: userId,
-      week: activeWeek,
-      total_points: mondayTotal,
-    });
-
-    alert("Monday total saved!");
-  };
-
-  // ---- Organize by week ----
   const gamesByWeek: Record<number, Game[]> = {};
   games.forEach((g) => {
     if (!gamesByWeek[g.week]) gamesByWeek[g.week] = [];
@@ -192,15 +212,36 @@ const MakePicksPage = () => {
 
   if (loading) return <div>Loading...</div>;
 
+  const maxWeek = Math.max(...games.map((g) => g.week));
+  const currentWeekNum = activeWeek ?? 1;
+
   return (
-    <div className="p-6 max-w-3xl mx-auto">
-      <div className="flex justify-between mb-6">
-        <h1 className="text-3xl font-bold">NFL Weekly Picks</h1>
+    <div className="p-6 max-w-6xl mx-auto">
+      {/* Header - UPDATED WITH HOME BUTTON */}
+      <div className="flex justify-between items-center mb-6 flex-wrap gap-4">
         <div className="flex items-center gap-4">
-          {userEmail && <span>{userEmail}</span>}
+          {/* HOME BUTTON ADDED HERE */}
+          <Link 
+            href="/" 
+            className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 transition-colors"
+          >
+            Home
+          </Link>
+          <h1 className="text-3xl font-bold">NFL Weekly Picks</h1>
+        </div>
+        <div className="flex items-center gap-4">
+          {/* Link to All Picks Page */}
+          <Link 
+            href="/all-picks" 
+            className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 transition-colors"
+          >
+            View All Picks
+          </Link>
+          
+          {userEmail && <span className="text-gray-700">{userEmail}</span>}
           <button
             onClick={handleLogout}
-            className="bg-red-500 text-white px-4 py-2 rounded"
+            className="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 transition-colors"
           >
             Logout
           </button>
@@ -208,21 +249,30 @@ const MakePicksPage = () => {
       </div>
 
       {/* Week Tabs */}
-      <div className="flex gap-2 mb-6 overflow-x-auto">
-        {Object.keys(gamesByWeek)
-          .map(Number)
-          .sort((a, b) => a - b)
-          .map((week) => (
-            <button
-              key={week}
-              onClick={() => setActiveWeek(week)}
-              className={`px-4 py-2 rounded ${
-                week === activeWeek ? "bg-blue-500 text-white" : "bg-gray-200"
-              }`}
-            >
-              Week {week}
-            </button>
-          ))}
+      <div className="overflow-x-auto mb-8">
+        <div className="flex gap-2 min-w-max px-2 pb-2">
+          {Array.from({ length: maxWeek }, (_, i) => i + 1).map((week) => {
+            const isActive = activeWeek === week;
+            const isCompleted = week < activeWeek!;
+
+            const color = isActive
+              ? "bg-green-500 text-white"
+              : "bg-blue-500 text-white hover:bg-blue-600";
+
+            return (
+              <button
+                key={week}
+                onClick={() => setActiveWeek(week)}
+                className={`px-4 py-2 rounded-md text-sm font-semibold flex items-center gap-1 transition-all ${color}`}
+              >
+                Week {week}
+                {isCompleted && (
+                  <span className="text-white font-bold">✔</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Games */}
@@ -233,74 +283,136 @@ const MakePicksPage = () => {
           const isFinal = g.status === "Final";
           const isLive = g.status === "InProgress";
 
-          const teamBtn = (team: string, picked: boolean) =>
-            `px-4 py-2 rounded ${
-              picked ? "bg-blue-500 text-white" : "bg-gray-100"
-            } ${locked ? "opacity-50 cursor-not-allowed" : ""}`;
+          const pickCorrect =
+            isFinal && pick ? (pick === g.winner ? true : false) : null;
+
+          const teamBtn = (team: string) => {
+            let base =
+              "px-4 py-2 rounded-md font-semibold transition-all text-center min-w-[80px]";
+
+            if (pick === team && !isFinal) {
+              base += " bg-blue-500 text-white";
+            }
+
+            if (pick === team && isFinal) {
+              base += pickCorrect
+                ? " bg-green-500 text-white"
+                : " bg-red-500 text-white";
+            }
+
+            if (locked && pick !== team) {
+              base += " bg-gray-100 text-gray-500 cursor-not-allowed";
+            }
+
+            return base;
+          };
 
           return (
             <div
               key={g.id}
-              className="border p-4 mb-4 rounded flex flex-col gap-2"
+              className="border-2 border-gray-300 rounded-xl p-6 mb-6 flex flex-col gap-4 
+                        transition-all duration-300 max-w-2xl mx-auto w-full
+                        bg-white shadow-lg
+                        hover:shadow-2xl hover:-translate-y-1 hover:border-blue-200
+                        transform-gpu"
+              style={{
+                boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)'
+              }}
             >
-              <div className="flex justify-between items-center">
-                <div className="font-semibold">
+              {/* Top section: Game info - Centered */}
+              <div className="flex flex-col items-center text-center gap-3">
+                <div className="font-bold text-xl sm:text-2xl truncate w-full text-gray-800">
                   {g.awayTeam} @ {g.homeTeam}
                 </div>
-                <div className="text-sm text-gray-500">{formatTime(g.start_time)}</div>
+
+                <div className="flex flex-col items-center gap-2">
+                  <div
+                    className={`font-semibold text-lg ${
+                      isLive 
+                        ? "text-green-600" 
+                        : isFinal 
+                        ? "text-gray-800"
+                        : "text-blue-600"
+                    }`}
+                  >
+                    {isFinal ? "FINAL" : isLive ? "LIVE" : "UPCOMING"}
+                  </div>
+
+                  <div className="text-sm text-gray-600 font-medium">
+                    {formatTime(g.start_time)}
+                  </div>
+                </div>
+
+                {/* Show final score if game is completed */}
+                {isFinal && g.home_score !== null && g.away_score !== null && (
+                  <div className="bg-gray-100 rounded-lg px-4 py-2 mt-2">
+                    <div className="font-bold text-lg text-gray-800">
+                      Final: {g.awayTeam} {g.away_score} - {g.homeTeam} {g.home_score}
+                    </div>
+                    {g.winner && (
+                      <div className="text-sm font-semibold text-green-600 mt-1">
+                        Winner: {g.winner}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Show pick result if user made a pick and game is final */}
+                {isFinal && pick && (
+                  <div className={`rounded-lg px-4 py-2 mt-2 ${
+                    pickCorrect ? 'bg-green-100 border border-green-300' : 'bg-red-100 border border-red-300'
+                  }`}>
+                    <div className={`font-semibold ${
+                      pickCorrect ? 'text-green-800' : 'text-red-800'
+                    }`}>
+                      Your pick: {pick} - {pickCorrect ? '✓ Correct' : '✗ Incorrect'}
+                    </div>
+                  </div>
+                )}
+
+                {/* Show lock status message */}
+                {locked && pick && (
+                  <div className="bg-yellow-100 border border-yellow-300 rounded-lg px-4 py-2 mt-2">
+                    <div className="text-sm font-semibold text-yellow-800">
+                      Your pick is locked: {pick}
+                    </div>
+                  </div>
+                )}
               </div>
 
-              <div className="text-sm">
-                {isFinal && (
-                  <span className="text-green-700 font-semibold">
-                    Final — {g.away_score} - {g.home_score} ({g.winner} won)
-                  </span>
-                )}
-                {isLive && <span className="text-orange-600 font-semibold">In Progress</span>}
-                {!isFinal && !isLive && (
-                  <span className="text-gray-500">Starts in {getCountdown(g.start_time)}</span>
-                )}
+              {/* Middle section: Team selection buttons - Centered */}
+              <div className="flex justify-center items-center gap-3">
+                <div className="flex flex-wrap justify-center gap-3">
+                  <button
+                    disabled={locked}
+                    onClick={() => selectPick(g.id, g.homeTeam, g.start_time)}
+                    className={teamBtn(g.homeTeam) + " transform transition-transform hover:scale-105"}
+                  >
+                    {g.homeTeam}
+                  </button>
+                  <button
+                    disabled={locked}
+                    onClick={() => selectPick(g.id, g.awayTeam, g.start_time)}
+                    className={teamBtn(g.awayTeam) + " transform transition-transform hover:scale-105"}
+                  >
+                    {g.awayTeam}
+                  </button>
+                </div>
               </div>
 
-              <div className="flex gap-2">
-                <button
-                  disabled={locked}
-                  onClick={() => selectPick(g.id, g.homeTeam, g.start_time)}
-                  className={teamBtn(g.homeTeam, pick === g.homeTeam)}
-                >
-                  {g.homeTeam}
-                </button>
-                <button
-                  disabled={locked}
-                  onClick={() => selectPick(g.id, g.awayTeam, g.start_time)}
-                  className={teamBtn(g.awayTeam, pick === g.awayTeam)}
-                >
-                  {g.awayTeam}
-                </button>
-              </div>
+              {/* Bottom section: Countdown - Centered */}
+              {!isFinal && !isLive && (
+                <div className="flex justify-center">
+                  <div className="font-bold text-red-600 bg-red-100 px-4 py-2 rounded-lg border-2 border-red-200 text-center shadow-sm">
+                    ⏰ {locked ? "Game locked - picks cannot be changed" : `Starts in ${getCountdown(g.start_time)}`}
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}
-
-      {/* Monday Night Total */}
-      <div className="border rounded p-4 bg-gray-50 mt-6">
-        <h2 className="font-semibold mb-2">Monday Night Total Points</h2>
-        <input
-          type="number"
-          value={mondayTotal ?? ""}
-          onChange={(e) => setMondayTotal(Number(e.target.value))}
-          className="border p-2 rounded mr-2 w-24"
-        />
-        <button
-          onClick={saveMondayTotal}
-          className="bg-blue-500 text-white px-4 py-2 rounded"
-        >
-          Save
-        </button>
-      </div>
     </div>
   );
 };
 
 export default MakePicksPage;
-

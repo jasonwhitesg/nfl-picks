@@ -2,72 +2,56 @@ import { NextResponse } from "next/server";
 import axios from "axios";
 import { supabase } from "@/lib/supabaseClient";
 
-const API_KEY = "91dbdb354ff441729d0e968729bfd040";
+const API_KEY = "91dbdb354ff441729d0e968729bfd040"; // Free schedule API
 const SEASON = 2025;
 
 export async function GET() {
   try {
-    // 1️⃣ Fetch NFL scores (includes winners and scores)
+    // Use SchedulesBasic to avoid fake scores
     const res = await axios.get(
-      `https://api.sportsdata.io/v3/nfl/scores/json/Scores/${SEASON}`,
+      `https://api.sportsdata.io/v3/nfl/scores/json/SchedulesBasic/${SEASON}`,
       { headers: { "Ocp-Apim-Subscription-Key": API_KEY } }
     );
 
     const games = res.data;
-    const today = new Date();
     const weeks: Record<string, any[]> = {};
     const gamesToUpsert: any[] = [];
 
     for (const game of games) {
-      const gameDate = new Date(game.Date);
+      const gameDate = new Date(game.DateTimeUTC || game.DateTime || game.Date);
 
-      // Skip past games if needed, or keep all to track scores
-      // if (gameDate < today) continue;
-
-      const weekKey = `Week ${game.Week}`;
+      const weekKey = `Week ${game.Week ?? "Unknown"}`;
       if (!weeks[weekKey]) weeks[weekKey] = [];
 
       const newGame = {
-        id: game.GameKey.toString(), // unique ID
+        id: game.GameKey?.toString(),
         week: game.Week,
+        season: SEASON,
         start_time: gameDate.toISOString(),
         team_a: game.HomeTeam,
         team_b: game.AwayTeam,
-        home_score: game.HomeScore ?? null,
-        away_score: game.AwayScore ?? null,
-        winner: game.Status === "Final" ? game.Winner : null,
-        sportsdata_game_id: game.GameKey.toString(),
+        sportsdata_game_id: game.GameKey?.toString(),
+        winner: null,       // no scores yet
+        home_score: null,   // no scores
+        away_score: null,   // no scores
+        status: "Scheduled" // default status
       };
 
       gamesToUpsert.push(newGame);
-
-      // Prepare response for frontend
-      weeks[weekKey].push({
-        id: game.GameKey,
-        homeTeam: game.HomeTeam,
-        awayTeam: game.AwayTeam,
-        date: gameDate.toISOString(),
-        homeScore: game.HomeScore ?? null,
-        awayScore: game.AwayScore ?? null,
-        winner: game.Status === "Final" ? game.Winner : null,
-      });
+      weeks[weekKey].push(newGame);
     }
 
-    // 2️⃣ Upsert all games in Supabase
     const { error } = await supabase
       .from("games")
-      .upsert(gamesToUpsert, { onConflict: "id" }); // use "id" as unique key
+      .upsert(gamesToUpsert, { onConflict: "id" });
 
     if (error) {
       console.error("Supabase upsert error:", error.message);
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // 3️⃣ Sort each week by start time
     Object.keys(weeks).forEach((week) => {
-      weeks[week].sort(
-        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
-      );
+      weeks[week].sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
     });
 
     return NextResponse.json(weeks);
@@ -76,11 +60,3 @@ export async function GET() {
     return NextResponse.json({ error: "Failed to fetch NFL games" }, { status: 500 });
   }
 }
-
-
-
-
-
-
-
-

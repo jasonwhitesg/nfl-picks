@@ -107,13 +107,25 @@ const AllPicksPage = () => {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      <div className="mb-4">
-        <Link href="/make-picks" className="text-blue-600 underline hover:text-blue-800">
-          ← Back to Make Picks
-        </Link>
+      {/* Header with Home and Make Picks links - UPDATED WITH HOME BUTTON */}
+      <div className="flex justify-between items-center mb-6 flex-wrap gap-4">
+        <div className="flex items-center gap-4">
+          {/* HOME BUTTON ADDED HERE */}
+          <Link 
+            href="/" 
+            className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 transition-colors"
+          >
+            Home
+          </Link>
+          <Link 
+            href="/make-picks" 
+            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition-colors"
+          >
+            Make Picks
+          </Link>
+        </div>
+        <h1 className="text-3xl font-bold">All Player Picks</h1>
       </div>
-
-      <h1 className="text-3xl font-bold mb-6">All Player Picks</h1>
 
       {/* Week tabs */}
       <div className="flex gap-2 mb-6 overflow-x-auto">
@@ -193,10 +205,5 @@ const AllPicksPage = () => {
 };
 
 export default AllPicksPage;
-
-
-
-
-
 
 
