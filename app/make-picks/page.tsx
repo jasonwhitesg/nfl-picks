@@ -23,21 +23,15 @@ const MakePicksPage = () => {
   const router = useRouter();
   const [games, setGames] = useState<Game[]>([]);
   const [picks, setPicks] = useState<Picks>({});
-  const [now, setNow] = useState<Date>(getNowMST());
+  const [now, setNow] = useState<Date>(new Date());
   const [activeWeek, setActiveWeek] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
 
-  function getNowMST(): Date {
-    return new Date(
-      new Date().toLocaleString("en-US", { timeZone: "America/Denver" })
-    );
-  }
-
   // Update now every second for real-time countdown
   useEffect(() => {
-    const interval = setInterval(() => setNow(getNowMST()), 1000);
+    const interval = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -87,19 +81,29 @@ const MakePicksPage = () => {
       return;
     }
 
-    const mapped: Game[] = data.map((g: any) => {
+    // Filter out any games with null teams or bye weeks
+    const filteredData = data.filter((g: any) => 
+      g.team_a && g.team_b && 
+      g.team_a.trim() !== '' && g.team_b.trim() !== '' &&
+      g.team_a.toLowerCase() !== 'bye' && g.team_b.toLowerCase() !== 'bye'
+    );
+
+    const mapped: Game[] = filteredData.map((g: any) => {
       let status = g.status;
       let winner = g.winner;
-      const estDate = new Date(g.start_time);
-      const mstDate = new Date(estDate.getTime() - 2 * 60 * 60 * 1000); // EST → MST
+      
+      // Convert UTC time to MST (subtract 7 hours for UTC to MST)
+      // If your database time is actually UTC, subtract 7 hours to get MST
+      // If it's already MST, don't subtract anything
+      const utcDate = new Date(g.start_time);
+      const mstDate = new Date(utcDate.getTime() - 7 * 60 * 60 * 1000); // UTC → MST
 
       // Determine game status and winner if not already set
       if (!status) {
-        const gameTime = new Date(g.start_time);
         if (g.home_score != null && g.away_score != null) {
           status = "Final";
           winner = g.home_score > g.away_score ? g.team_a : g.team_b;
-        } else if (gameTime <= getNowMST()) {
+        } else if (utcDate <= now) {
           status = "InProgress";
         } else {
           status = "Scheduled";
@@ -111,7 +115,7 @@ const MakePicksPage = () => {
         week: g.week,
         homeTeam: g.team_a,
         awayTeam: g.team_b,
-        start_time: mstDate.toISOString(),
+        start_time: mstDate.toISOString(), // Store as MST
         home_score: g.home_score,
         away_score: g.away_score,
         winner,
@@ -121,11 +125,12 @@ const MakePicksPage = () => {
 
     setGames(mapped);
 
+    // Find the upcoming week (first week with future games)
     const upcomingWeek = [...new Set(mapped.map((g) => g.week))]
       .sort((a, b) => a - b)
       .find((w) =>
         mapped.some(
-          (g) => g.week === w && new Date(g.start_time) > getNowMST()
+          (g) => g.week === w && new Date(g.start_time) > now
         )
       );
 
@@ -134,12 +139,13 @@ const MakePicksPage = () => {
 
   useEffect(() => {
     fetchGames();
-    const interval = setInterval(fetchGames, 180000);
+    const interval = setInterval(fetchGames, 180000); // Refresh every 3 minutes
     return () => clearInterval(interval);
-  }, []);
+  }, [now]); // Add now as dependency
 
-  const formatTime = (iso: string) =>
-    new Date(iso).toLocaleString("en-US", {
+  const formatTime = (iso: string) => {
+    // The time is already stored as MST, so we can format it directly
+    return new Date(iso).toLocaleString("en-US", {
       timeZone: "America/Denver",
       weekday: "short",
       month: "short",
@@ -148,9 +154,11 @@ const MakePicksPage = () => {
       minute: "2-digit",
       hour12: true,
     });
+  };
 
   const getCountdown = (iso: string) => {
-    const diff = new Date(iso).getTime() - now.getTime();
+    const gameTime = new Date(iso);
+    const diff = gameTime.getTime() - now.getTime();
     if (diff <= 0) return "Game started";
     const hours = Math.floor(diff / (1000 * 60 * 60));
     const mins = Math.floor((diff / (1000 * 60)) % 60);
@@ -177,7 +185,6 @@ const MakePicksPage = () => {
     if (!userId) return;
 
     try {
-      // Use upsert to update existing pick or create new one
       const { error } = await supabase
         .from("game_picks")
         .upsert({
@@ -192,13 +199,11 @@ const MakePicksPage = () => {
 
       if (error) {
         console.error("Error saving pick:", error);
-        // Revert local state if there was an error
         setPicks((prev) => ({ ...prev, [gameId]: picks[gameId] }));
         alert("Error saving your pick. Please try again.");
       }
     } catch (err) {
       console.error("Error saving pick:", err);
-      // Revert local state if there was an error
       setPicks((prev) => ({ ...prev, [gameId]: picks[gameId] }));
       alert("Error saving your pick. Please try again.");
     }
@@ -217,10 +222,9 @@ const MakePicksPage = () => {
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
-      {/* Header - UPDATED WITH HOME BUTTON */}
+      {/* Header */}
       <div className="flex justify-between items-center mb-6 flex-wrap gap-4">
         <div className="flex items-center gap-4">
-          {/* HOME BUTTON ADDED HERE */}
           <Link 
             href="/" 
             className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600 transition-colors"
@@ -230,7 +234,6 @@ const MakePicksPage = () => {
           <h1 className="text-3xl font-bold">NFL Weekly Picks</h1>
         </div>
         <div className="flex items-center gap-4">
-          {/* Link to All Picks Page */}
           <Link 
             href="/all-picks" 
             className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 transition-colors"
@@ -253,7 +256,7 @@ const MakePicksPage = () => {
         <div className="flex gap-2 min-w-max px-2 pb-2">
           {Array.from({ length: maxWeek }, (_, i) => i + 1).map((week) => {
             const isActive = activeWeek === week;
-            const isCompleted = week < activeWeek!;
+            const isCompleted = week < currentWeekNum;
 
             const color = isActive
               ? "bg-green-500 text-white"
@@ -339,7 +342,7 @@ const MakePicksPage = () => {
                   </div>
 
                   <div className="text-sm text-gray-600 font-medium">
-                    {formatTime(g.start_time)}
+                    {formatTime(g.start_time)} MST
                   </div>
                 </div>
 

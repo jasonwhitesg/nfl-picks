@@ -50,8 +50,15 @@ export default function Home() {
         if (error) throw error;
         if (!games) return;
 
+        // FILTER OUT BYE WEEK GAMES - same as other pages
+        const filteredGames = games.filter((g: any) => 
+          g.team_a && g.team_b && 
+          g.team_a.trim() !== '' && g.team_b.trim() !== '' &&
+          g.team_a.toLowerCase() !== 'bye' && g.team_b.toLowerCase() !== 'bye'
+        );
+
         // Map games with proper timezone conversion
-        const mappedGames: Game[] = games.map((g: any) => {
+        const mappedGames: Game[] = filteredGames.map((g: any) => {
           let status = g.status;
           let winner = g.winner;
           const estDate = new Date(g.start_time);
@@ -136,6 +143,11 @@ export default function Home() {
       hour12: true,
     });
 
+  // Helper function to get pick summary for a specific game
+  const getPickSummary = (gameId: string) => {
+    return currentWeekSummary.find(summary => summary.game_id === gameId);
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="container mx-auto px-4 py-8">
@@ -174,86 +186,102 @@ export default function Home() {
           </Link>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-8">
-          {/* Current Week Games */}
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-2xl font-bold text-gray-800 mb-4">
-              Week {currentWeek} Games
-            </h2>
-            {loading ? (
-              <p className="text-gray-600">Loading current week games...</p>
-            ) : currentWeekGames.length === 0 ? (
-              <p className="text-gray-600">No games scheduled for this week.</p>
-            ) : (
-              <div className="space-y-4">
-                {currentWeekGames.map((game) => {
-                  const isFinal = game.status === "Final";
-                  const isLive = game.status === "InProgress";
-                  const isUpcoming = !isFinal && !isLive;
-                  
-                  return (
-                    <div key={game.id} className="border border-gray-200 rounded-lg p-4">
-                      <div className="flex justify-between items-start mb-2">
-                        <div className="font-semibold text-gray-800">
-                          {game.awayTeam} @ {game.homeTeam}
-                        </div>
-                        <div className={`text-sm font-medium ${
-                          isFinal ? "text-gray-600" : 
-                          isLive ? "text-green-600" : 
-                          "text-blue-600"
-                        }`}>
-                          {isFinal ? "FINAL" : isLive ? "LIVE" : "UPCOMING"}
-                        </div>
+        {/* Combined Games and Pick Percentages */}
+        <div className="bg-white rounded-lg shadow-md p-6 max-w-4xl mx-auto">
+          <h2 className="text-2xl font-bold text-gray-800 mb-6 text-center">
+            Week {currentWeek} Games & Pick Percentages
+          </h2>
+          {loading ? (
+            <p className="text-gray-600 text-center">Loading current week data...</p>
+          ) : currentWeekGames.length === 0 ? (
+            <p className="text-gray-600 text-center">No games scheduled for this week.</p>
+          ) : (
+            <div className="space-y-6">
+              {currentWeekGames.map((game) => {
+                const isFinal = game.status === "Final";
+                const isLive = game.status === "InProgress";
+                const isUpcoming = !isFinal && !isLive;
+                const pickSummary = getPickSummary(game.id);
+                
+                return (
+                  <div key={game.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                    {/* Game Header */}
+                    <div className="flex justify-between items-start mb-3">
+                      <div className="font-semibold text-gray-800 text-lg">
+                        {game.awayTeam} @ {game.homeTeam}
                       </div>
-                      <div className="text-sm text-gray-600">
-                        {formatTime(game.start_time)}
+                      <div className={`text-sm font-medium px-2 py-1 rounded ${
+                        isFinal ? "bg-gray-100 text-gray-600" : 
+                        isLive ? "bg-green-100 text-green-600" : 
+                        "bg-blue-100 text-blue-600"
+                      }`}>
+                        {isFinal ? "FINAL" : isLive ? "LIVE" : "UPCOMING"}
                       </div>
-                      {isFinal && game.home_score !== null && game.away_score !== null && (
-                        <div className="text-sm font-semibold text-gray-800 mt-2">
-                          Final: {game.awayTeam} {game.away_score} - {game.homeTeam} {game.home_score}
-                        </div>
-                      )}
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
 
-          {/* Current Week Pick Percentages */}
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-2xl font-bold text-gray-800 mb-4">
-              Week {currentWeek} Pick Percentages
-            </h2>
-            {loading ? (
-              <p className="text-gray-600">Loading pick percentages...</p>
-            ) : currentWeekSummary.length === 0 ? (
-              <p className="text-gray-600">No picks made for this week yet.</p>
-            ) : (
-              <div className="space-y-3">
-                {currentWeekSummary.map((g) => (
-                  <div key={g.game_id} className="border border-gray-200 rounded-lg p-3">
-                    <div className="font-semibold text-gray-800 mb-2">
-                      {g.awayTeam} @ {g.homeTeam}
+                    {/* Game Time */}
+                    <div className="text-sm text-gray-600 mb-3">
+                      {formatTime(game.start_time)}
                     </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600">{g.awayTeam}</span>
-                      <span className="text-sm font-semibold">{g.awayPercent}%</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-600">{g.homeTeam}</span>
-                      <span className="text-sm font-semibold">{g.homePercent}%</span>
-                    </div>
+
+                    {/* Final Score (if available) */}
+                    {isFinal && game.home_score !== null && game.away_score !== null && (
+                      <div className="text-sm font-semibold text-gray-800 mb-3 p-2 bg-gray-50 rounded">
+                        Final: {game.awayTeam} {game.away_score} - {game.homeTeam} {game.home_score}
+                      </div>
+                    )}
+
+                    {/* Pick Percentages */}
+                    {pickSummary && (
+                      <div className="border-t pt-3">
+                        <div className="text-sm font-semibold text-gray-700 mb-2">Pick Percentages:</div>
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm text-gray-600">{pickSummary.awayTeam}</span>
+                            <div className="flex items-center gap-2">
+                              <div className="w-20 bg-gray-200 rounded-full h-2">
+                                <div 
+                                  className="bg-blue-500 h-2 rounded-full" 
+                                  style={{ width: `${pickSummary.awayPercent}%` }}
+                                ></div>
+                              </div>
+                              <span className="text-sm font-semibold min-w-8">{pickSummary.awayPercent}%</span>
+                            </div>
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm text-gray-600">{pickSummary.homeTeam}</span>
+                            <div className="flex items-center gap-2">
+                              <div className="w-20 bg-gray-200 rounded-full h-2">
+                                <div 
+                                  className="bg-red-500 h-2 rounded-full" 
+                                  style={{ width: `${pickSummary.homePercent}%` }}
+                                ></div>
+                              </div>
+                              <span className="text-sm font-semibold min-w-8">{pickSummary.homePercent}%</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* No Picks Message */}
+                    {!pickSummary && (
+                      <div className="border-t pt-3">
+                        <div className="text-sm text-gray-500 text-center">
+                          No picks made for this game yet
+                        </div>
+                      </div>
+                    )}
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Quick Stats */}
-        <div className="mt-8 bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-2xl font-bold text-gray-800 mb-4">Quick Stats</h2>
+        <div className="mt-8 bg-white rounded-lg shadow-md p-6 max-w-4xl mx-auto">
+          <h2 className="text-2xl font-bold text-gray-800 mb-4 text-center">Quick Stats</h2>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="text-center">
               <div className="text-3xl font-bold text-blue-600">{currentWeekGames.length}</div>

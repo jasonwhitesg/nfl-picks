@@ -42,7 +42,15 @@ const AllPicksPage = () => {
         setProfiles(profileData || []);
 
         const { data: gameData } = await supabase.from("games").select("*");
-        const mappedGames: Game[] = (gameData || []).map((g: any) => ({
+        
+        // FILTER OUT BYE WEEK GAMES - same as MakePicksPage
+        const filteredGameData = (gameData || []).filter((g: any) => 
+          g.team_a && g.team_b && 
+          g.team_a.trim() !== '' && g.team_b.trim() !== '' &&
+          g.team_a.toLowerCase() !== 'bye' && g.team_b.toLowerCase() !== 'bye'
+        );
+
+        const mappedGames: Game[] = filteredGameData.map((g: any) => ({
           id: g.id,
           week: g.week,
           startTime: g.start_time,
