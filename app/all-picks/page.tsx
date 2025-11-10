@@ -52,6 +52,8 @@ const AllPicksPage = () => {
     mostCorrect: string[];
     closestMonday: string[];
   }>({ mostCorrect: [], closestMonday: [] });
+  const [sortBy, setSortBy] = useState<'percentage' | 'name'>('percentage'); // NEW: Sort state
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc'); // NEW: Sort order
 
   // Get current time in MST (same as MakePicksPage)
   function getNowMST(): Date {
@@ -223,6 +225,41 @@ const AllPicksPage = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // NEW: Sort profiles based on current sort criteria
+  const getSortedProfiles = () => {
+    return [...profiles].sort((a, b) => {
+      const statsA = userStats[a.user_id] || { percentage: 0 };
+      const statsB = userStats[b.user_id] || { percentage: 0 };
+      
+      if (sortBy === 'percentage') {
+        if (sortOrder === 'desc') {
+          return statsB.percentage - statsA.percentage; // Highest first
+        } else {
+          return statsA.percentage - statsB.percentage; // Lowest first
+        }
+      } else {
+        // Sort by name
+        if (sortOrder === 'desc') {
+          return b.email.localeCompare(a.email);
+        } else {
+          return a.email.localeCompare(b.email);
+        }
+      }
+    });
+  };
+
+  // NEW: Handle sort click
+  const handleSortClick = (column: 'percentage' | 'name') => {
+    if (sortBy === column) {
+      // Toggle order if clicking the same column
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      // Switch to new column with default order
+      setSortBy(column);
+      setSortOrder('desc'); // Default to descending for percentage, highest first
+    }
+  };
+
   const isLocked = (isoDate: string) => {
     const gameTime = new Date(isoDate); // This is already in MST
     return now.getTime() >= gameTime.getTime();
@@ -280,6 +317,7 @@ const AllPicksPage = () => {
   if (loading) return <div className="p-6 text-lg">Loading all picks...</div>;
 
   const activeWeekGames = getActiveWeekGames();
+  const sortedProfiles = getSortedProfiles(); // NEW: Get sorted profiles
 
   return (
     <div className="p-6 max-w-7xl mx-auto bg-white min-h-screen">
@@ -343,9 +381,33 @@ const AllPicksPage = () => {
           <table className="table-auto border-collapse w-full text-center">
             <thead>
               <tr className="bg-gray-100">
-                <th className="border border-gray-300 p-3 font-bold text-gray-800">Player</th>
+                <th className="border border-gray-300 p-3 font-bold text-gray-800">
+                  <button 
+                    onClick={() => handleSortClick('name')}
+                    className="hover:bg-gray-200 px-2 py-1 rounded transition-colors flex items-center gap-1 mx-auto"
+                  >
+                    Player
+                    {sortBy === 'name' && (
+                      <span className="text-xs">
+                        {sortOrder === 'desc' ? '↓' : '↑'}
+                      </span>
+                    )}
+                  </button>
+                </th>
                 <th className="border border-gray-300 p-3 font-bold text-gray-800">Correct</th>
-                <th className="border border-gray-300 p-3 font-bold text-gray-800">%</th>
+                <th className="border border-gray-300 p-3 font-bold text-gray-800">
+                  <button 
+                    onClick={() => handleSortClick('percentage')}
+                    className="hover:bg-gray-200 px-2 py-1 rounded transition-colors flex items-center gap-1 mx-auto"
+                  >
+                    %
+                    {sortBy === 'percentage' && (
+                      <span className="text-xs">
+                        {sortOrder === 'desc' ? '↓' : '↑'}
+                      </span>
+                    )}
+                  </button>
+                </th>
                 {activeWeekGames.map((game) => (
                   <th key={game.id} className="border border-gray-300 p-3 font-bold text-gray-800">
                     {formatGameLabel(game)}
@@ -386,8 +448,8 @@ const AllPicksPage = () => {
                 <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">-</td>
               </tr>
 
-              {/* Player picks */}
-              {profiles.map((user) => {
+              {/* Player picks - NOW USING SORTED PROFILES */}
+              {sortedProfiles.map((user) => {
                 const stats = userStats[user.user_id] || {
                   correctPicks: 0,
                   totalPicks: 0,
@@ -551,6 +613,10 @@ const AllPicksPage = () => {
           <div className="flex items-center gap-3">
             <span className="text-purple-600 text-xs">Total: XX</span>
             <span className="text-gray-800 font-medium">Monday night total (shown when final)</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-blue-600 font-medium">Click % or Player</span>
+            <span className="text-gray-800 font-medium">Sort by percentage or name</span>
           </div>
         </div>
       </div>

@@ -33,7 +33,9 @@ const MakePicksPage = () => {
   const [userId, setUserId] = useState<string | null>(null);
   const [mondayNightTotals, setMondayNightTotals] = useState<MondayNightTotals>({});
   const [savingScore, setSavingScore] = useState<string | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
   const [debugInfo, setDebugInfo] = useState<string[]>([]);
+  const [userSelectedWeek, setUserSelectedWeek] = useState<boolean>(false); // NEW: Track if user manually selected week
 
   const addDebugInfo = (message: string) => {
     console.log(`[DEBUG] ${message}`);
@@ -153,6 +155,24 @@ const MakePicksPage = () => {
 
     setGames(mapped);
 
+    // Only auto-update the active week if user hasn't manually selected one
+    if (!userSelectedWeek) {
+      // Find the upcoming week
+      const upcomingWeek = [...new Set(mapped.map((g) => g.week))]
+        .sort((a, b) => a - b)
+        .find((w) =>
+          mapped.some(
+            (g) => g.week === w && new Date(g.start_time) > now
+          )
+        );
+
+      const newActiveWeek = upcomingWeek ?? Math.max(...mapped.map((g) => g.week));
+      setActiveWeek(newActiveWeek);
+      addDebugInfo(`📅 Auto-setting active week: ${newActiveWeek} (userSelected: ${userSelectedWeek})`);
+    } else {
+      addDebugInfo(`📅 Keeping user-selected week: ${activeWeek}`);
+    }
+
     // Detailed debug for Week 10
     const week10Games = mapped.filter(g => g.week === 10);
     addDebugInfo(`🔍 Week 10 games: ${week10Games.length} total`);
@@ -169,19 +189,6 @@ const MakePicksPage = () => {
     if (lvDenGame) {
       addDebugInfo(`🎯 LV@DEN DETAIL: home_score=${lvDenGame.home_score}, away_score=${lvDenGame.away_score}, status=${lvDenGame.status}`);
     }
-
-    // Find the upcoming week
-    const upcomingWeek = [...new Set(mapped.map((g) => g.week))]
-      .sort((a, b) => a - b)
-      .find((w) =>
-        mapped.some(
-          (g) => g.week === w && new Date(g.start_time) > now
-        )
-      );
-
-    const newActiveWeek = upcomingWeek ?? Math.max(...mapped.map((g) => g.week));
-    setActiveWeek(newActiveWeek);
-    addDebugInfo(`📅 Active week: ${newActiveWeek}`);
   };
 
   useEffect(() => {
@@ -189,6 +196,20 @@ const MakePicksPage = () => {
     const interval = setInterval(() => fetchGames(), 30000); // Refresh every 30 seconds
     return () => clearInterval(interval);
   }, [now]);
+
+  // NEW: Handle week selection
+  const handleWeekSelect = (week: number) => {
+    setUserSelectedWeek(true); // Mark that user manually selected a week
+    setActiveWeek(week);
+    addDebugInfo(`🎯 User manually selected week: ${week}`);
+  };
+
+  // Reset user selection when component mounts or when we want to go back to auto-selection
+  // You could add a "Current Week" button later if needed
+  useEffect(() => {
+    // Reset user selection when component first loads
+    setUserSelectedWeek(false);
+  }, []);
 
   // Debug functions
   const checkSpecificGame = async () => {
@@ -441,6 +462,7 @@ const MakePicksPage = () => {
 
   const maxWeek = Math.max(...games.map((g) => g.week));
   const currentWeekNum = activeWeek ?? 1;
+  const isJasonUser = userEmail === 'jasonwhitesg@gmail.com';
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
@@ -463,36 +485,50 @@ const MakePicksPage = () => {
             View All Picks
           </Link>
           
-          {/* Debug Buttons */}
+          {/* Debug Buttons - Only show if debug panel is visible or user is Jason */}
+          {showDebug && (
+            <>
+              <button
+                onClick={() => fetchGames(true)}
+                className="bg-orange-500 text-white px-4 py-2 rounded hover:bg-orange-600 transition-colors"
+              >
+                Refresh Scores
+              </button>
+              {isJasonUser && (
+                <button
+                  onClick={runScoreUpdate}
+                  className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition-colors"
+                >
+                  Update Scores API
+                </button>
+              )}
+              <button
+                onClick={checkSpecificGame}
+                className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 transition-colors"
+              >
+                Check LV@DEN
+              </button>
+              <button
+                onClick={checkAllWeek10Games}
+                className="bg-indigo-500 text-white px-4 py-2 rounded hover:bg-indigo-600 transition-colors"
+              >
+                Check All Week 10
+              </button>
+              <button
+                onClick={runSQLQueries}
+                className="bg-teal-500 text-white px-4 py-2 rounded hover:bg-teal-600 transition-colors"
+              >
+                Run SQL Diagnostics
+              </button>
+            </>
+          )}
+          
+          {/* Show debug toggle button */}
           <button
-            onClick={() => fetchGames(true)}
-            className="bg-orange-500 text-white px-4 py-2 rounded hover:bg-orange-600 transition-colors"
+            onClick={() => setShowDebug(!showDebug)}
+            className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700 transition-colors"
           >
-            Refresh Scores
-          </button>
-          <button
-            onClick={runScoreUpdate}
-            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition-colors"
-          >
-            Update Scores API
-          </button>
-          <button
-            onClick={checkSpecificGame}
-            className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 transition-colors"
-          >
-            Check LV@DEN
-          </button>
-          <button
-            onClick={checkAllWeek10Games}
-            className="bg-indigo-500 text-white px-4 py-2 rounded hover:bg-indigo-600 transition-colors"
-          >
-            Check All Week 10
-          </button>
-          <button
-            onClick={runSQLQueries}
-            className="bg-teal-500 text-white px-4 py-2 rounded hover:bg-teal-600 transition-colors"
-          >
-            Run SQL Diagnostics
+            {showDebug ? 'Hide Debug' : 'Show Debug'}
           </button>
           
           {userEmail && <span className="text-gray-700">{userEmail}</span>}
@@ -505,29 +541,31 @@ const MakePicksPage = () => {
         </div>
       </div>
 
-      {/* Debug Info Panel */}
-      <div className="mb-6 p-4 bg-gray-100 border border-gray-300 rounded-lg">
-        <div className="flex justify-between items-center mb-2">
-          <h3 className="font-bold text-lg">Debug Info (Make Picks)</h3>
-          <button
-            onClick={() => setDebugInfo([])}
-            className="text-sm bg-gray-500 text-white px-2 py-1 rounded"
-          >
-            Clear Debug
-          </button>
+      {/* Debug Info Panel - Only show when debug is enabled */}
+      {showDebug && (
+        <div className="mb-6 p-4 bg-gray-100 border border-gray-300 rounded-lg">
+          <div className="flex justify-between items-center mb-2">
+            <h3 className="font-bold text-lg">Debug Info (Make Picks)</h3>
+            <button
+              onClick={() => setDebugInfo([])}
+              className="text-sm bg-gray-500 text-white px-2 py-1 rounded"
+            >
+              Clear Debug
+            </button>
+          </div>
+          <div className="text-sm font-mono max-h-64 overflow-y-auto bg-black text-green-400 p-3 rounded">
+            {debugInfo.length === 0 ? (
+              <div className="text-gray-500">No debug info yet. Use the buttons above to test.</div>
+            ) : (
+              debugInfo.map((info, index) => (
+                <div key={index} className="border-b border-gray-700 py-1">
+                  {info}
+                </div>
+              ))
+            )}
+          </div>
         </div>
-        <div className="text-sm font-mono max-h-64 overflow-y-auto bg-black text-green-400 p-3 rounded">
-          {debugInfo.length === 0 ? (
-            <div className="text-gray-500">No debug info yet. Use the buttons above to test.</div>
-          ) : (
-            debugInfo.map((info, index) => (
-              <div key={index} className="border-b border-gray-700 py-1">
-                {info}
-              </div>
-            ))
-          )}
-        </div>
-      </div>
+      )}
 
       {/* Week Tabs */}
       <div className="overflow-x-auto mb-8">
@@ -543,7 +581,7 @@ const MakePicksPage = () => {
             return (
               <button
                 key={week}
-                onClick={() => setActiveWeek(week)}
+                onClick={() => handleWeekSelect(week)} // CHANGED: Use new handler
                 className={`px-4 py-2 rounded-md text-sm font-semibold flex items-center gap-1 transition-all ${color}`}
               >
                 Week {week}
