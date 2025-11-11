@@ -918,23 +918,23 @@ const AllPicksPage = () => {
 
                       {/* Monday night pick column */}
                       <td className={`border border-gray-300 p-3 font-semibold ${
-                        isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-purple-50'
-                      }`}>
+                        isWinner ? getWinnerBackgroundColor() : 'bg-purple-50'
+                      } text-gray-900`}>
                         {mondayNightLocked 
                           ? (stats.mondayNightPick !== null ? stats.mondayNightPick : "-") 
                           : "❓"
                         }
                       </td>
-                      
+
                       {/* Actual total column */}
                       <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">
                         {mondayNightFinal && stats.actualMondayTotal !== null ? stats.actualMondayTotal : "-"}
                       </td>
-                      
+
                       {/* Difference column */}
                       <td className={`border border-gray-300 p-3 font-semibold ${
-                        isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-purple-50'
-                      }`}>
+                        isWinner ? getWinnerBackgroundColor() : 'bg-purple-50'
+                      } text-gray-900`}>
                         {mondayNightFinal && stats.mondayNightDifference !== null ? stats.mondayNightDifference : "-"}
                       </td>
                     </tr>
