@@ -37,10 +37,10 @@ const MakePicksPage = () => {
   const [debugInfo, setDebugInfo] = useState<string[]>([]);
   const [userSelectedWeek, setUserSelectedWeek] = useState<boolean>(false);
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
-  const [debugActive, setDebugActive] = useState(false); // NEW: Control debug logging
+  const [debugActive, setDebugActive] = useState(false);
 
   const addDebugInfo = (message: string) => {
-    if (!debugActive) return; // NEW: Only log if debug is active
+    if (!debugActive) return;
     console.log(`[DEBUG] ${message}`);
     setDebugInfo(prev => [...prev.slice(-19), `${new Date().toLocaleTimeString()}: ${message}`]);
   };
@@ -102,7 +102,7 @@ const MakePicksPage = () => {
     fetchPicksAndTotals();
   }, [userId]);
 
-  const fetchGames = async (forceRefresh = false) => {
+    const fetchGames = async (forceRefresh = false) => {
     addDebugInfo(`Fetching games from database... ${forceRefresh ? '(FORCED)' : ''}`);
     
     const { data, error } = await supabase
@@ -161,39 +161,77 @@ const MakePicksPage = () => {
 
     setGames(mapped);
 
-    // Only auto-update the active week if user hasn't manually selected one
+    // FIXED WEEK SELECTION LOGIC
     if (!userSelectedWeek) {
-      // Find the upcoming week
-      const upcomingWeek = [...new Set(mapped.map((g) => g.week))]
-        .sort((a, b) => a - b)
-        .find((w) =>
-          mapped.some(
-            (g) => g.week === w && new Date(g.start_time) > now
-          )
-        );
-
-      const newActiveWeek = upcomingWeek ?? Math.max(...mapped.map((g) => g.week));
-      setActiveWeek(newActiveWeek);
-      addDebugInfo(`📅 Auto-setting active week: ${newActiveWeek} (userSelected: ${userSelectedWeek})`);
+      const weekNumbers = Array.from(new Set(mapped.map((g) => g.week))).sort((a, b) => a - b);
+      
+      let newActiveWeek = activeWeek;
+      
+      // Find the current week by checking each week from lowest to highest
+      for (let week of weekNumbers) {
+        const weekGames = mapped.filter(g => g.week === week);
+        
+        if (weekGames.length === 0) continue;
+        
+        // Check if this week has any upcoming or in-progress games
+        const hasActiveGames = weekGames.some(game => {
+          const gameTime = new Date(game.start_time);
+          return gameTime > now || (gameTime <= now && game.status !== "Final");
+        });
+        
+        // Check if all games are final
+        const allGamesFinal = weekGames.every(game => game.status === "Final");
+        
+        addDebugInfo(`🔍 Week ${week}: games=${weekGames.length}, hasActive=${hasActiveGames}, allFinal=${allGamesFinal}`);
+        
+        // If this week has active games, use it
+        if (hasActiveGames) {
+          newActiveWeek = week;
+          addDebugInfo(`🎯 Setting active week to ${week} - has active games`);
+          break;
+        }
+        
+        // If all games are final and we haven't found an active week yet, 
+        // keep track of this as a potential fallback
+        if (allGamesFinal && !newActiveWeek) {
+          newActiveWeek = week;
+          addDebugInfo(`📌 Week ${week} as fallback - all games final`);
+        }
+      }
+      
+      // If no active week found but we have a fallback (most recent completed week), use it
+      if (newActiveWeek) {
+        setActiveWeek(newActiveWeek);
+        addDebugInfo(`📅 Final active week: ${newActiveWeek}`);
+      } else {
+        // Final fallback
+        newActiveWeek = weekNumbers[weekNumbers.length - 1] || 1;
+        setActiveWeek(newActiveWeek);
+        addDebugInfo(`🎯 Final fallback: using week ${newActiveWeek}`);
+      }
     } else {
       addDebugInfo(`📅 Keeping user-selected week: ${activeWeek}`);
     }
 
-    // Detailed debug for Week 10
-    const week10Games = mapped.filter(g => g.week === 10);
-    addDebugInfo(`🔍 Week 10 games: ${week10Games.length} total`);
-    
-    week10Games.forEach(g => {
-      const scoreInfo = g.home_score !== null && g.away_score !== null 
-        ? `${g.away_score}-${g.home_score}` 
-        : 'null-null';
-      addDebugInfo(`🏈 ${g.awayTeam} @ ${g.homeTeam}: ${scoreInfo} - ${g.status}`);
-    });
+    // Detailed debug for current week
+    if (activeWeek) {
+      const currentWeekGames = mapped.filter(g => g.week === activeWeek);
+      addDebugInfo(`🔍 Current Week ${activeWeek} games: ${currentWeekGames.length} total`);
+      
+      currentWeekGames.forEach(g => {
+        const scoreInfo = g.home_score !== null && g.away_score !== null 
+          ? `${g.away_score}-${g.home_score}` 
+          : 'null-null';
+        const gameTime = new Date(g.start_time);
+        const timeStatus = gameTime > now ? 'UPCOMING' : (g.status === 'Final' ? 'FINAL' : 'IN_PROGRESS');
+        addDebugInfo(`🏈 ${g.awayTeam} @ ${g.homeTeam}: ${scoreInfo} - ${g.status} - ${timeStatus} ${g.is_monday_night ? '(MNF)' : ''}`);
+      });
 
-    // Check LV @ DEN specifically
-    const lvDenGame = week10Games.find(g => g.awayTeam === 'LV' && g.homeTeam === 'DEN');
-    if (lvDenGame) {
-      addDebugInfo(`🎯 LV@DEN DETAIL: home_score=${lvDenGame.home_score}, away_score=${lvDenGame.away_score}, status=${lvDenGame.status}`);
+      // Check Monday Night Football specifically
+      const mondayNightGame = currentWeekGames.find(g => g.is_monday_night);
+      if (mondayNightGame) {
+        addDebugInfo(`🎯 MNF GAME: ${mondayNightGame.awayTeam} @ ${mondayNightGame.homeTeam}: ${mondayNightGame.status}`);
+      }
     }
   };
 
@@ -216,7 +254,7 @@ const MakePicksPage = () => {
     setUserSelectedWeek(false);
   }, []);
 
-  // NEW: Toggle debug logging
+  // Toggle debug logging
   const toggleDebugActive = () => {
     setDebugActive(!debugActive);
     addDebugInfo(`Debug logging ${!debugActive ? 'STARTED' : 'STOPPED'}`);
@@ -532,7 +570,7 @@ const MakePicksPage = () => {
               >
                 Run SQL Diagnostics
               </button>
-              {/* NEW: Start/Stop Debug Logging Button */}
+              {/* Start/Stop Debug Logging Button */}
               <button
                 onClick={toggleDebugActive}
                 className={`px-4 py-2 rounded transition-colors ${

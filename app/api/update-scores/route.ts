@@ -26,11 +26,12 @@ const teamMap: Record<string, string> = {
 
 async function getCurrentWeek(): Promise<number | null> {
   try {
-    const nowMST = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Denver" }));
+    const now = new Date();
+    console.log(`🕐 Current server time: ${now.toISOString()}`);
     
     const { data: games, error } = await supabase
       .from("games")
-      .select("week, start_time")
+      .select("week, start_time, status, team_a, team_b")
       .order("week", { ascending: true });
 
     if (error) {
@@ -38,30 +39,103 @@ async function getCurrentWeek(): Promise<number | null> {
       return null;
     }
 
-    const weekNumbers = Array.from(new Set(games.map(g => g.week))).sort((a, b) => a - b);
-    
-    const upcomingWeek = weekNumbers.find(week => {
-      const weekGames = games.filter(g => g.week === week);
-      return weekGames.some(game => {
-        const gameTime = new Date(game.start_time);
-        const mstGameTime = new Date(gameTime.getTime() - 7 * 60 * 60 * 1000);
-        return mstGameTime > nowMST;
-      });
-    });
+    if (!games || games.length === 0) {
+      console.warn("⚠️ No games found in database");
+      return null;
+    }
 
-    const currentWeek = upcomingWeek ?? Math.max(...weekNumbers);
+    const weekNumbers = Array.from(new Set(games.map(g => g.week))).sort((a, b) => a - b);
+    console.log(`📋 Available weeks in database: ${weekNumbers.join(', ')}`);
     
-    console.log(`📅 Current week determined: ${currentWeek}`);
+    // Find the current week by looking for weeks with active games
+    let currentWeek = null;
+    
+    for (const week of weekNumbers) {
+      const weekGames = games.filter(g => g.week === week);
+      
+      // Filter out BYE games - they shouldn't count as "active" games
+      const realGames = weekGames.filter(game => 
+        game.team_a.toLowerCase() !== 'bye' && game.team_b.toLowerCase() !== 'bye'
+      );
+      
+      console.log(`🔍 Checking week ${week}: ${weekGames.length} total games, ${realGames.length} real games`);
+      
+      if (realGames.length === 0) {
+        console.log(`   Week ${week}: SKIPPING - no real games (only BYE games)`);
+        continue;
+      }
+      
+      // Check if this week has any REAL games that are not final
+      const hasActiveGames = realGames.some(game => {
+        const gameTime = new Date(game.start_time);
+        const gameStatus = game.status;
+        
+        // Game is active if:
+        // 1. It's scheduled for the future, OR
+        // 2. It's in progress, OR  
+        // 3. It's in the past but not marked as final (recently completed)
+        const isUpcoming = gameTime > now;
+        const isInProgress = gameStatus === 'InProgress';
+        const isCompletedButNotFinal = gameTime <= now && gameStatus !== 'Final';
+        
+        return isUpcoming || isInProgress || isCompletedButNotFinal;
+      });
+      
+      // Check if all REAL games are final
+      const allGamesFinal = realGames.every(game => game.status === 'Final');
+      
+      console.log(`   Week ${week}: hasActiveGames=${hasActiveGames}, allGamesFinal=${allGamesFinal}`);
+      
+      // PRIORITY: If this week has active games, it's definitely the current week
+      if (hasActiveGames) {
+        currentWeek = week;
+        console.log(`🎯 Found active week: ${week} - has live/scheduled games`);
+        break; // STOP searching - we found the current week
+      }
+      
+      // If no active week found yet, track the most recent week with REAL games
+      // but don't break - we want to keep looking for active games in higher weeks
+      if (!currentWeek && realGames.length > 0) {
+        currentWeek = week;
+        console.log(`📌 Tracking week ${week} as potential fallback`);
+      }
+    }
+
+    // If we found an active week, use it (this should be the case for week 10)
+    if (currentWeek) {
+      console.log(`📅 Using week ${currentWeek} as current week`);
+      return currentWeek;
+    }
+
+    // Final fallback - find the highest week with REAL games
+    // This should only happen if ALL games in ALL weeks are final
+    if (weekNumbers.length > 0) {
+      for (let i = weekNumbers.length - 1; i >= 0; i--) {
+        const week = weekNumbers[i];
+        const weekGames = games.filter(g => g.week === week);
+        const realGames = weekGames.filter(game => 
+          game.team_a.toLowerCase() !== 'bye' && game.team_b.toLowerCase() !== 'bye'
+        );
+        
+        if (realGames.length > 0) {
+          currentWeek = week;
+          console.log(`🔄 Final fallback to week ${week} - has ${realGames.length} real games`);
+          break;
+        }
+      }
+    }
+    
+    console.log(`📅 Final current week determination: ${currentWeek}`);
     return currentWeek;
   } catch (error) {
-    console.error("Error determining current week:", error);
+    console.error("❌ Error determining current week:", error);
     return null;
   }
 }
 
 export async function GET() {
   try {
-    console.log("📡 Fetching NFL scores for current week...");
+    console.log("📡 Starting NFL scores update...");
 
     const currentWeek = await getCurrentWeek();
     if (!currentWeek) {
@@ -72,7 +146,7 @@ export async function GET() {
     console.log(`🔍 Checking what games exist in database for week ${currentWeek}...`);
     const { data: existingGames, error: fetchError } = await supabase
       .from("games")
-      .select("id, team_a, team_b, home_score, away_score, status, winner, week")
+      .select("id, team_a, team_b, home_score, away_score, status, winner, week, start_time, is_monday_night")
       .eq("week", currentWeek)
       .order("start_time");
 
@@ -80,6 +154,19 @@ export async function GET() {
       console.error("❌ Error fetching existing games:", fetchError);
     } else {
       console.log(`📊 Found ${existingGames?.length || 0} games in database for week ${currentWeek}`);
+      
+      // Log game status summary
+      const scheduledGames = existingGames?.filter(g => g.status === 'Scheduled').length || 0;
+      const liveGames = existingGames?.filter(g => g.status === 'InProgress').length || 0;
+      const finalGames = existingGames?.filter(g => g.status === 'Final').length || 0;
+      const mondayNightGames = existingGames?.filter(g => g.is_monday_night).length || 0;
+      
+      console.log(`📈 Week ${currentWeek} Status: ${scheduledGames} scheduled, ${liveGames} live, ${finalGames} final, ${mondayNightGames} MNF games`);
+      
+      existingGames?.forEach(game => {
+        const mnfIndicator = game.is_monday_night ? ' [MNF]' : '';
+        console.log(`   ${game.team_b} @ ${game.team_a}: ${game.away_score}-${game.home_score} - ${game.status}${mnfIndicator}`);
+      });
     }
 
     console.log(`⏳ Fetching week ${currentWeek} from ESPN...`);
@@ -88,6 +175,8 @@ export async function GET() {
     );
 
     const events = response.data.events || [];
+    console.log(`📋 ESPN returned ${events.length} events for week ${currentWeek}`);
+    
     if (!events.length) {
       console.warn(`⚠️ No games found for week ${currentWeek}`);
       return NextResponse.json({ message: "No games found for current week" }, { status: 200 });
@@ -131,16 +220,18 @@ export async function GET() {
       const dbAwayTeam = teamMap[awayTeam.team.abbreviation] || awayTeam.team.abbreviation;
 
       console.log(
-        `🎯 ESPN Game: ${awayTeam.team.abbreviation} @ ${homeTeam.team.abbreviation} | Status: ${status} | Scores: ${awayScore}-${homeScore} | Winner: ${winner}`
+        `🎯 ESPN Game: ${dbAwayTeam} @ ${dbHomeTeam} | Status: ${status} | Scores: ${awayScore}-${homeScore} | Winner: ${winner}`
       );
 
       // Calculate total points for Monday night game
       let actualTotalPoints = null;
       const gameDate = new Date(event.date);
-      const isMondayNight = gameDate.getUTCHours() >= 1 && gameDate.getUTCHours() <= 3;
-      const gameDay = gameDate.getUTCDay();
       
-      if ((isMondayNight && gameDay === 1) || status === "Final") {
+      // Improved Monday night detection
+      const isMondayNight = event.name?.toLowerCase().includes('monday night') || 
+                           (gameDate.getUTCDay() === 1 && gameDate.getUTCHours() >= 1);
+      
+      if (isMondayNight && status === "Final") {
         if (homeScore !== null && awayScore !== null) {
           actualTotalPoints = homeScore + awayScore;
           console.log(`🏈 Monday Night Total Points: ${actualTotalPoints}`);
@@ -160,17 +251,14 @@ export async function GET() {
         mondayNightGameUpdated = true;
       }
 
-      // FIXED: Your database stores team_a as HOME team, team_b as AWAY team
-      // ESPN returns: awayTeam @ homeTeam
-      // So we need to match: team_a = homeTeam, team_b = awayTeam
-      console.log(`🔄 Attempting to update: team_a='${dbHomeTeam}' (home), team_b='${dbAwayTeam}' (away), week=${currentWeek}`);
+      // First try: match exactly as ESPN provides (team_a = home, team_b = away)
+      console.log(`🔄 Attempt 1: Updating team_a='${dbHomeTeam}', team_b='${dbAwayTeam}', week=${currentWeek}`);
       
-      // Try the update with CORRECT team order
       const { data: updateResult, error } = await supabase
         .from("games")
         .update(updateData)
-        .eq("team_a", dbHomeTeam)  // team_a is HOME team in your database
-        .eq("team_b", dbAwayTeam)  // team_b is AWAY team in your database  
+        .eq("team_a", dbHomeTeam)
+        .eq("team_b", dbAwayTeam)
         .eq("week", currentWeek)
         .select();
 
@@ -179,10 +267,13 @@ export async function GET() {
       } else if (updateResult && updateResult.length > 0) {
         console.log(`✅ Update succeeded: Updated ${updateResult.length} row(s)`);
         updatedCount++;
+        continue; // Move to next game
       } else {
-        console.log(`❌ No rows updated - trying reverse team order...`);
+        console.log(`❌ No rows updated with team_a='${dbHomeTeam}', team_b='${dbAwayTeam}'`);
         
-        // Try the reverse order just in case
+        // Second try: reverse the teams (team_a = away, team_b = home)
+        console.log(`🔄 Attempt 2: Trying team_a='${dbAwayTeam}', team_b='${dbHomeTeam}', week=${currentWeek}`);
+        
         const { data: reverseResult, error: reverseError } = await supabase
           .from("games")
           .update(updateData)
@@ -192,7 +283,7 @@ export async function GET() {
           .select();
 
         if (reverseError) {
-          console.error(`❌ Reverse update also failed:`, reverseError);
+          console.error(`❌ Reverse update failed:`, reverseError);
         } else if (reverseResult && reverseResult.length > 0) {
           console.log(`✅ Reverse update succeeded: Updated ${reverseResult.length} row(s)`);
           updatedCount++;

@@ -29,6 +29,8 @@ type Pick = {
 type Profile = {
   user_id: string;
   email: string;
+  first_name: string;
+  last_name: string;
   is_admin?: boolean;
 };
 
@@ -39,6 +41,7 @@ type UserStats = {
   mondayNightPick: number | null;
   actualMondayTotal: number | null;
   mondayNightDifference: number | null;
+  hasMadePicks: boolean;
 };
 
 const AllPicksPage = () => {
@@ -60,6 +63,8 @@ const AllPicksPage = () => {
   const [editingPaidStatus, setEditingPaidStatus] = useState<string | null>(null);
   const [paidStatus, setPaidStatus] = useState<Record<string, boolean>>({});
   const [updatingPaidStatus, setUpdatingPaidStatus] = useState<string | null>(null);
+  const [hoveredUser, setHoveredUser] = useState<string | null>(null);
+  const [userSelectedWeek, setUserSelectedWeek] = useState<boolean>(false);
 
   const SEASON_YEAR = 2025;
 
@@ -86,13 +91,11 @@ const AllPicksPage = () => {
         return;
       }
 
-      // Convert the array to a record for easy lookup
       const paidStatusRecord: Record<string, boolean> = {};
       paidData?.forEach(payment => {
         paidStatusRecord[payment.user_id] = payment.is_paid || false;
       });
 
-      // Set default false for users without payment records
       profiles.forEach(profile => {
         if (!(profile.user_id in paidStatusRecord)) {
           paidStatusRecord[profile.user_id] = false;
@@ -114,7 +117,6 @@ const AllPicksPage = () => {
       const currentStatus = paidStatus[userId] || false;
       const newStatus = !currentStatus;
 
-      // Upsert the payment status
       const { error } = await supabase
         .from('weekly_payments')
         .upsert({
@@ -130,7 +132,6 @@ const AllPicksPage = () => {
 
       if (error) throw error;
 
-      // Update local state
       setPaidStatus(prev => ({
         ...prev,
         [userId]: newStatus
@@ -144,7 +145,7 @@ const AllPicksPage = () => {
     }
   };
 
-  // ---------- Fetch all data ----------
+  // ---------- Fetch all data with improved week detection ----------
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -154,7 +155,7 @@ const AllPicksPage = () => {
 
         const { data: profileData } = await supabase
           .from("profiles")
-          .select("user_id, email, is_admin");
+          .select("user_id, email, first_name, last_name, is_admin");
         setProfiles(profileData || []);
 
         // Check if current user is admin
@@ -176,12 +177,12 @@ const AllPicksPage = () => {
         const mappedGames: Game[] = filteredGameData.map((g: any) => {
           // Convert UTC time to MST (subtract 7 hours for UTC to MST)
           const utcDate = new Date(g.start_time);
-          const mstDate = new Date(utcDate.getTime() - 7 * 60 * 60 * 1000); // UTC → MST
+          const mstDate = new Date(utcDate.getTime() - 7 * 60 * 60 * 1000);
 
           return {
             id: g.id,
             week: g.week,
-            startTime: mstDate.toISOString(), // Store as MST
+            startTime: mstDate.toISOString(),
             homeTeam: g.team_b,
             awayTeam: g.team_a,
             home_score: g.home_score,
@@ -201,26 +202,53 @@ const AllPicksPage = () => {
         const { data: pickData } = await supabase.from("game_picks").select("*");
         setPicks(pickData || []);
 
-        // Use MST for current week calculation
-        const nowMST = getNowMST();
-        
-        // Find the current week based on games that haven't started yet
-        const weekNumbers = Array.from(new Set(sortedGames.map((g) => g.week))).sort((a, b) => a - b);
-        
-        // Find the first week that has games in the future
-        const upcomingWeek = weekNumbers.find(week => {
-          const weekGames = sortedGames.filter(g => g.week === week);
-          return weekGames.some(game => new Date(game.startTime) > nowMST);
-        });
-
-        // If no upcoming games, use the latest week
-        const currentWeek = upcomingWeek ?? Math.max(...weekNumbers);
-        
-        setActiveWeek(currentWeek);
-        
-        // Fetch paid status after activeWeek is set and profiles are loaded
-        if (profileData && profileData.length > 0) {
-          setTimeout(() => fetchPaidStatus(), 100);
+        // IMPROVED WEEK SELECTION LOGIC - same as MakePicksPage
+        if (!userSelectedWeek) {
+          const weekNumbers = Array.from(new Set(sortedGames.map((g) => g.week))).sort((a, b) => a - b);
+          const nowMST = getNowMST();
+          
+          let newActiveWeek = activeWeek;
+          
+          // Find the current week by checking each week from lowest to highest
+          for (let week of weekNumbers) {
+            const weekGames = sortedGames.filter(g => g.week === week);
+            
+            if (weekGames.length === 0) continue;
+            
+            // Check if this week has any upcoming or in-progress games
+            const hasActiveGames = weekGames.some(game => {
+              const gameTime = new Date(game.startTime);
+              return gameTime > nowMST || (gameTime <= nowMST && game.status !== "Final");
+            });
+            
+            // Check if all games are final
+            const allGamesFinal = weekGames.every(game => game.status === "Final");
+            
+            // If this week has active games, use it
+            if (hasActiveGames) {
+              newActiveWeek = week;
+              console.log(`🎯 Setting active week to ${week} - has active games`);
+              break;
+            }
+            
+            // If all games are final and we haven't found an active week yet, 
+            // keep track of this as a potential fallback
+            if (allGamesFinal && !newActiveWeek) {
+              newActiveWeek = week;
+              console.log(`📌 Week ${week} as fallback - all games final`);
+            }
+          }
+          
+          // If no active week found but we have a fallback (most recent completed week), use it
+          if (newActiveWeek) {
+            setActiveWeek(newActiveWeek);
+            console.log(`📅 Final active week: ${newActiveWeek}`);
+          } else {
+            // Final fallback
+            newActiveWeek = weekNumbers[weekNumbers.length - 1] || 1;
+            setActiveWeek(newActiveWeek);
+            console.log(`🎯 Final fallback: using week ${newActiveWeek}`);
+          }
         }
         
         setLoading(false);
@@ -231,7 +259,7 @@ const AllPicksPage = () => {
     };
 
     fetchData();
-  }, []);
+  }, [userSelectedWeek]);
 
   // Refetch paid status when active week changes
   useEffect(() => {
@@ -254,17 +282,22 @@ const AllPicksPage = () => {
       const userPicks = picks.filter(pick => pick.user_id === profile.user_id);
       const weekGames = games.filter(game => game.week === activeWeek);
       
-      // Calculate correct picks for ALL games in the week (not just completed ones)
-      // Count total possible picks for the week
+      // FIXED: Better logic to determine if user has made picks
+      // Count how many picks they made for this week
+      const picksForThisWeek = userPicks.filter(pick => 
+        weekGames.some(game => game.id === pick.game_id)
+      );
+      
+      const hasMadePicks = picksForThisWeek.length > 0;
+
       const totalGamesInWeek = weekGames.length;
       
       let correctPicks = 0;
-      let totalPicksMade = 0;
+      let totalPicksMade = picksForThisWeek.length;
 
       weekGames.forEach(game => {
         const userPick = userPicks.find(p => p.game_id === game.id);
         if (userPick) {
-          totalPicksMade++;
           // Only count as correct if the game is final and they picked the winner
           if (game.status === "Final" && game.winner !== null && userPick.selected_team === game.winner) {
             correctPicks++;
@@ -272,15 +305,13 @@ const AllPicksPage = () => {
         }
       });
 
-      // Calculate percentage based on total games in week, not just picks made
+      // Calculate percentage based on total games in week
       const percentage = totalGamesInWeek > 0 ? Math.round((correctPicks / totalGamesInWeek) * 100) : 0;
 
-      // Find Monday night game data with proper null handling
       const mondayNightGame = weekGames.find(game => game.is_monday_night);
       const mondayNightPickValue = userPicks.find(p => p.game_id === mondayNightGame?.id)?.total_points;
       const actualMondayTotalValue = mondayNightGame?.actual_total_points;
       
-      // Convert undefined to null for type safety
       const mondayNightPick = mondayNightPickValue !== undefined ? mondayNightPickValue : null;
       const actualMondayTotal = actualMondayTotalValue !== undefined ? actualMondayTotalValue : null;
       
@@ -291,29 +322,32 @@ const AllPicksPage = () => {
 
       stats[profile.user_id] = {
         correctPicks,
-        totalPicks: totalGamesInWeek, // Now shows total games in week instead of picks made
+        totalPicks: totalGamesInWeek,
         percentage,
         mondayNightPick,
         actualMondayTotal,
-        mondayNightDifference
+        mondayNightDifference,
+        hasMadePicks
       };
 
-      // Track best performers
-      if (correctPicks > maxCorrectPicks) {
-        maxCorrectPicks = correctPicks;
-      }
-      if (mondayNightDifference !== null && mondayNightDifference < minMondayDifference) {
-        minMondayDifference = mondayNightDifference;
+      // Only consider users who made picks for best performer calculations
+      if (hasMadePicks) {
+        if (correctPicks > maxCorrectPicks) {
+          maxCorrectPicks = correctPicks;
+        }
+        if (mondayNightDifference !== null && mondayNightDifference < minMondayDifference) {
+          minMondayDifference = mondayNightDifference;
+        }
       }
     });
 
-    // Find users with max correct picks and closest Monday night picks
+    // Find best performers (only among users who made picks)
     profiles.forEach(profile => {
       const userStat = stats[profile.user_id];
-      if (userStat.correctPicks === maxCorrectPicks && maxCorrectPicks > 0) {
+      if (userStat.hasMadePicks && userStat.correctPicks === maxCorrectPicks && maxCorrectPicks > 0) {
         usersWithMaxCorrect.push(profile.user_id);
       }
-      if (userStat.mondayNightDifference === minMondayDifference && minMondayDifference !== Infinity) {
+      if (userStat.hasMadePicks && userStat.mondayNightDifference === minMondayDifference && minMondayDifference !== Infinity) {
         usersWithClosestMonday.push(profile.user_id);
       }
     });
@@ -323,28 +357,52 @@ const AllPicksPage = () => {
       mostCorrect: usersWithMaxCorrect,
       closestMonday: usersWithClosestMonday
     });
+
+    // DEBUG: Log which users are being shown
+    console.log("📊 Users with picks for week", activeWeek, ":");
+    profiles.forEach(profile => {
+      const userStat = stats[profile.user_id];
+      if (userStat.hasMadePicks) {
+        console.log(`✅ ${profile.email}: ${userStat.correctPicks}/${userStat.totalPicks} correct`);
+      } else {
+        console.log(`❌ ${profile.email}: No picks made`);
+      }
+    });
   }, [games, picks, profiles, activeWeek]);
 
   // ---------- Timer (needed for locked games) ----------
   useEffect(() => {
-    const interval = setInterval(() => setNow(getNowMST()), 1000); // Use MST time
+    const interval = setInterval(() => setNow(getNowMST()), 1000);
     return () => clearInterval(interval);
   }, []);
 
-  // Sort profiles based on current sort criteria
+  // Handle week selection
+  const handleWeekSelect = (week: number) => {
+    setUserSelectedWeek(true);
+    setActiveWeek(week);
+  };
+
+  // Sort profiles - FIXED: Show ALL users who made picks
   const getSortedProfiles = () => {
-    return [...profiles].sort((a, b) => {
+    // Filter to only show users who made picks for this week
+    const usersWithPicks = profiles.filter(profile => {
+      const stats = userStats[profile.user_id];
+      return stats?.hasMadePicks || false;
+    });
+
+    console.log(`👥 Showing ${usersWithPicks.length} users with picks for week ${activeWeek}`);
+
+    return usersWithPicks.sort((a, b) => {
       const statsA = userStats[a.user_id] || { percentage: 0 };
       const statsB = userStats[b.user_id] || { percentage: 0 };
       
       if (sortBy === 'percentage') {
         if (sortOrder === 'desc') {
-          return statsB.percentage - statsA.percentage; // Highest first
+          return statsB.percentage - statsA.percentage;
         } else {
-          return statsA.percentage - statsB.percentage; // Lowest first
+          return statsA.percentage - statsB.percentage;
         }
       } else {
-        // Sort by name
         if (sortOrder === 'desc') {
           return b.email.localeCompare(a.email);
         } else {
@@ -357,17 +415,15 @@ const AllPicksPage = () => {
   // Handle sort click
   const handleSortClick = (column: 'percentage' | 'name') => {
     if (sortBy === column) {
-      // Toggle order if clicking the same column
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
     } else {
-      // Switch to new column with default order
       setSortBy(column);
-      setSortOrder('desc'); // Default to descending for percentage, highest first
+      setSortOrder('desc');
     }
   };
 
   const isLocked = (isoDate: string) => {
-    const gameTime = new Date(isoDate); // This is already in MST
+    const gameTime = new Date(isoDate);
     return now.getTime() >= gameTime.getTime();
   };
 
@@ -403,14 +459,10 @@ const AllPicksPage = () => {
     
     const weekGames = gamesByWeek[activeWeek] || [];
     const hasUpcomingGames = weekGames.some(game => new Date(game.startTime) > now);
-    const hasLiveGames = weekGames.some(game => {
-      const gameTime = new Date(game.startTime);
-      const threeHoursLater = new Date(gameTime.getTime() + 3 * 60 * 60 * 1000);
-      return now >= gameTime && now <= threeHoursLater;
-    });
+    const hasLiveGames = weekGames.some(game => game.status === "InProgress");
 
-    if (hasUpcomingGames) return `Week ${activeWeek} (Current)`;
     if (hasLiveGames) return `Week ${activeWeek} (Live)`;
+    if (hasUpcomingGames) return `Week ${activeWeek} (Current)`;
     return `Week ${activeWeek} (Completed)`;
   };
 
@@ -459,6 +511,9 @@ const AllPicksPage = () => {
           <h2 className="text-xl font-semibold text-blue-800">
             {getCurrentWeekDisplay()}
           </h2>
+          <p className="text-sm text-blue-600 mt-1">
+            Showing {sortedProfiles.length} players who made picks for this week
+          </p>
         </div>
       )}
 
@@ -468,285 +523,307 @@ const AllPicksPage = () => {
           const weekNum = Number(week);
           const weekGames = gamesByWeek[weekNum] || [];
           const hasUpcomingGames = weekGames.some(game => new Date(game.startTime) > now);
+          const hasLiveGames = weekGames.some(game => game.status === "InProgress");
           const isCurrentWeek = activeWeek === weekNum;
           
           return (
             <button
               key={week}
-              onClick={() => setActiveWeek(weekNum)}
+              onClick={() => handleWeekSelect(weekNum)}
               className={`px-4 py-2 rounded font-semibold transition-colors min-w-[100px] ${
                 isCurrentWeek 
                   ? "bg-blue-600 text-white border-2 border-blue-700" 
-                  : hasUpcomingGames 
-                    ? "bg-green-100 text-green-800 border border-green-300 hover:bg-green-200"
-                    : "bg-gray-100 text-gray-700 border border-gray-300 hover:bg-gray-200"
+                  : hasLiveGames
+                    ? "bg-green-600 text-white border border-green-700 hover:bg-green-700"
+                    : hasUpcomingGames 
+                      ? "bg-green-100 text-green-800 border border-green-300 hover:bg-green-200"
+                      : "bg-gray-100 text-gray-700 border border-gray-300 hover:bg-gray-200"
               }`}
             >
               Week {week}
-              {hasUpcomingGames && " ⏱️"}
+              {hasLiveGames && " 🔴"}
+              {hasUpcomingGames && !hasLiveGames && " ⏱️"}
             </button>
           );
         })}
       </div>
 
       {activeWeek && activeWeekGames.length > 0 ? (
-        <div className="overflow-x-auto border border-gray-300 rounded-lg">
-          <table className="table-auto border-collapse w-full text-center">
-            <thead>
-              <tr className="bg-gray-100">
-                {/* Paid Column */}
-                <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-yellow-100">
-                  Paid
-                  {isAdmin && (
-                    <div className="text-xs font-normal text-gray-600 mt-1">
-                      (Click to edit)
-                    </div>
-                  )}
-                </th>
-                <th className="border border-gray-300 p-3 font-bold text-gray-800">
-                  <button 
-                    onClick={() => handleSortClick('name')}
-                    className="hover:bg-gray-200 px-2 py-1 rounded transition-colors flex items-center gap-1 mx-auto"
-                  >
-                    Player
-                    {sortBy === 'name' && (
-                      <span className="text-xs">
-                        {sortOrder === 'desc' ? '↓' : '↑'}
-                      </span>
+        <div className="border border-gray-300 rounded-lg">
+          {/* Table container with max height and scrolling */}
+          <div className="overflow-x-auto max-h-[80vh] overflow-y-auto">
+            <table className="table-auto border-collapse w-full text-center">
+              <thead className="sticky top-0 bg-gray-100 z-10">
+                <tr>
+                  {/* Paid Column */}
+                  <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-yellow-100 sticky top-0">
+                    Paid
+                    {isAdmin && (
+                      <div className="text-xs font-normal text-gray-600 mt-1">
+                        (Click to edit)
+                      </div>
                     )}
-                  </button>
-                </th>
-                <th className="border border-gray-300 p-3 font-bold text-gray-800">Correct</th>
-                <th className="border border-gray-300 p-3 font-bold text-gray-800">
-                  <button 
-                    onClick={() => handleSortClick('percentage')}
-                    className="hover:bg-gray-200 px-2 py-1 rounded transition-colors flex items-center gap-1 mx-auto"
-                  >
-                    %
-                    {sortBy === 'percentage' && (
-                      <span className="text-xs">
-                        {sortOrder === 'desc' ? '↓' : '↑'}
-                      </span>
-                    )}
-                  </button>
-                </th>
-                {activeWeekGames.map((game) => (
-                  <th key={game.id} className="border border-gray-300 p-3 font-bold text-gray-800">
-                    {formatGameLabel(game)}
-                    <div className="text-xs font-normal text-gray-600 mt-1">
-                      {formatTime(game.startTime)} MST
-                    </div>
                   </th>
-                ))}
-                <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-purple-100">MNF Pick</th>
-                <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-purple-100">Actual Total</th>
-                <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-purple-100">Difference</th>
-              </tr>
-            </thead>
-            <tbody>
-              {/* Locked row */}
-              <tr className="bg-gray-200">
-                <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-yellow-50">
-                  -
-                </td>
-                <td className="border border-gray-300 p-3 font-semibold text-gray-800">-</td>
-                <td className="border border-gray-300 p-3 font-semibold text-gray-800">-</td>
-                <td className="border border-gray-300 p-3 font-semibold text-gray-800">-</td>
-                {activeWeekGames.map((game) => {
-                  const locked = isLocked(game.startTime);
-                  return (
-                    <td key={game.id} className="border border-gray-300 p-3 text-center">
-                      <span
-                        className={`inline-block w-4 h-4 rounded-full ${
-                          locked ? "bg-red-600" : "bg-green-500"
-                        }`}
-                        title={locked ? "Game started / Pick locked" : "Pick available"}
-                      ></span>
-                      {locked && (
-                        <div className="text-xs text-gray-600 mt-1">LOCKED</div>
-                      )}
-                    </td>
-                  );
-                })}
-                <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">-</td>
-                <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">-</td>
-                <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">-</td>
-              </tr>
-
-              {/* Player picks */}
-              {sortedProfiles.map((user) => {
-                const stats = userStats[user.user_id] || {
-                  correctPicks: 0,
-                  totalPicks: 0,
-                  percentage: 0,
-                  mondayNightPick: null,
-                  actualMondayTotal: null,
-                  mondayNightDifference: null
-                };
-
-                const userPaidStatus = paidStatus[user.user_id] || false;
-                
-                // Only highlight if user is paid AND has best performance
-                const isMostCorrect = bestPerformers.mostCorrect.includes(user.user_id) && userPaidStatus;
-                const isClosestMonday = bestPerformers.closestMonday.includes(user.user_id) && userPaidStatus;
-
-                // Find Monday night game for this week
-                const mondayNightGame = activeWeekGames.find((game: Game) => game.is_monday_night);
-                const mondayNightLocked = mondayNightGame ? isLocked(mondayNightGame.startTime) : false;
-                const mondayNightFinal = mondayNightGame?.status === "Final";
-
-                return (
-                  <tr key={user.user_id} className="hover:bg-gray-50">
-                    {/* Paid Column */}
-                    <td 
-                      className={`border border-gray-300 p-3 text-center font-semibold bg-yellow-50 ${
-                        isAdmin && !updatingPaidStatus ? 'cursor-pointer hover:bg-yellow-100 transition-colors' : ''
-                      }`}
-                      onClick={() => isAdmin && !updatingPaidStatus && setEditingPaidStatus(user.user_id)}
+                  <th className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0">
+                    <button 
+                      onClick={() => handleSortClick('name')}
+                      className="hover:bg-gray-200 px-2 py-1 rounded transition-colors flex items-center gap-1 mx-auto"
                     >
-                      {updatingPaidStatus === user.user_id ? (
-                        <div className="flex items-center justify-center">
-                          <span className="text-gray-500">Updating...</span>
-                        </div>
-                      ) : editingPaidStatus === user.user_id ? (
-                        <div className="flex flex-col gap-1">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              togglePaidStatus(user.user_id);
-                            }}
-                            className={`px-2 py-1 rounded text-white text-sm ${
-                              userPaidStatus ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'
-                            }`}
-                          >
-                            {userPaidStatus ? 'Mark Unpaid' : 'Mark Paid'}
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingPaidStatus(null);
-                            }}
-                            className="px-2 py-1 bg-gray-500 text-white rounded text-sm hover:bg-gray-600"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center justify-center gap-2">
-                          {userPaidStatus ? (
-                            <span className="text-green-600 text-xl" title="Paid">✓</span>
-                          ) : (
-                            <span className="text-red-500 text-xl" title="Not Paid">✗</span>
-                          )}
-                          {isAdmin && !updatingPaidStatus && (
-                            <span className="text-xs text-gray-500">Click to edit</span>
-                          )}
-                        </div>
+                      Player
+                      {sortBy === 'name' && (
+                        <span className="text-xs">
+                          {sortOrder === 'desc' ? '↓' : '↑'}
+                        </span>
                       )}
-                    </td>
-
-                    {/* Player name */}
-                    <td className={`border border-gray-300 p-3 font-semibold ${
-                      isMostCorrect || isClosestMonday 
-                        ? "bg-green-100 text-green-900 border-green-300" 
-                        : "bg-gray-50 text-gray-800"
-                    }`}>
-                      {user.email}
-                      {(isMostCorrect || isClosestMonday) && (
-                        <div className="text-xs text-green-700 mt-1">
-                          {isMostCorrect && "🏆 Most Correct "}
-                          {isClosestMonday && "🎯 Closest MNF"}
-                        </div>
+                    </button>
+                  </th>
+                  <th className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0">Correct</th>
+                  <th className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0">
+                    <button 
+                      onClick={() => handleSortClick('percentage')}
+                      className="hover:bg-gray-200 px-2 py-1 rounded transition-colors flex items-center gap-1 mx-auto"
+                    >
+                      %
+                      {sortBy === 'percentage' && (
+                        <span className="text-xs">
+                          {sortOrder === 'desc' ? '↓' : '↑'}
+                        </span>
                       )}
-                    </td>
-
-                    {/* Correct picks - now shows correct/total games in week */}
-                    <td className={`border border-gray-300 p-3 font-semibold ${
-                      isMostCorrect 
-                        ? "bg-green-100 text-green-900 border-green-300" 
-                        : "bg-blue-50 text-gray-800"
-                    }`}>
-                      {stats.correctPicks}/{stats.totalPicks}
-                    </td>
-
-                    {/* Percentage */}
-                    <td className={`border border-gray-300 p-3 font-semibold ${
-                      isMostCorrect 
-                        ? "bg-green-100 text-green-900 border-green-300" 
-                        : "bg-blue-50 text-gray-800"
-                    }`}>
-                      {stats.percentage}%
-                    </td>
-
-                    {/* Game picks */}
-                    {activeWeekGames.map((game: Game) => {
-                      const locked = isLocked(game.startTime);
-                      const userPick = picks.find(
-                        (p) => p.user_id === user.user_id && p.game_id === game.id
-                      );
-                      
-                      // Show pick if game is locked
-                      const showPick = locked;
-                      const displayPick = showPick ? (userPick?.selected_team ?? "") : "❓";
-                      
-                      // Check if pick is correct (only for completed games)
-                      const isCorrect = game.status === "Final" && 
-                                      userPick?.selected_team === game.winner;
-                      
-                      return (
-                        <td
-                          key={game.id}
-                          className={`border border-gray-300 p-3 text-center font-medium ${
-                            showPick 
-                              ? userPick 
-                                ? isCorrect
-                                  ? "bg-green-100 text-green-900 border border-green-200"
-                                  : "bg-red-100 text-red-900 border border-red-200"
-                                : "bg-red-100 text-red-900 border border-red-200"
-                              : "bg-gray-100 text-gray-600 border border-gray-200"
+                    </button>
+                  </th>
+                  {activeWeekGames.map((game) => (
+                    <th key={game.id} className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0">
+                      {formatGameLabel(game)}
+                      <div className="text-xs font-normal text-gray-600 mt-1">
+                        {formatTime(game.startTime)} MST
+                      </div>
+                    </th>
+                  ))}
+                  <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-purple-100 sticky top-0">MNF Pick</th>
+                  <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-purple-100 sticky top-0">Actual Total</th>
+                  <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-purple-100 sticky top-0">Difference</th>
+                </tr>
+              </thead>
+              <tbody>
+                {/* Locked row */}
+                <tr className="bg-gray-200">
+                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-yellow-50">
+                    -
+                  </td>
+                  <td className="border border-gray-300 p-3 font-semibold text-gray-800">-</td>
+                  <td className="border border-gray-300 p-3 font-semibold text-gray-800">-</td>
+                  <td className="border border-gray-300 p-3 font-semibold text-gray-800">-</td>
+                  {activeWeekGames.map((game) => {
+                    const locked = isLocked(game.startTime);
+                    return (
+                      <td key={game.id} className="border border-gray-300 p-3 text-center">
+                        <span
+                          className={`inline-block w-4 h-4 rounded-full ${
+                            locked ? "bg-red-600" : "bg-green-500"
                           }`}
-                        >
-                          {displayPick}
-                          {/* Only show Monday night total when game is locked AND has total points */}
-                          {game.is_monday_night && locked && userPick?.total_points !== null && userPick?.total_points !== undefined && (
-                            <div className="text-xs text-purple-600 mt-1">
-                              Total: {userPick.total_points}
+                          title={locked ? "Game started / Pick locked" : "Pick available"}
+                        ></span>
+                        {locked && (
+                          <div className="text-xs text-gray-600 mt-1">LOCKED</div>
+                        )}
+                      </td>
+                    );
+                  })}
+                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">-</td>
+                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">-</td>
+                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">-</td>
+                </tr>
+
+                {/* Player picks - ALL users who made picks */}
+                {sortedProfiles.map((user) => {
+                  const stats = userStats[user.user_id] || {
+                    correctPicks: 0,
+                    totalPicks: 0,
+                    percentage: 0,
+                    mondayNightPick: null,
+                    actualMondayTotal: null,
+                    mondayNightDifference: null
+                  };
+
+                  const userPaidStatus = paidStatus[user.user_id] || false;
+                  
+                  const isMostCorrect = bestPerformers.mostCorrect.includes(user.user_id) && userPaidStatus;
+                  const isClosestMonday = bestPerformers.closestMonday.includes(user.user_id) && userPaidStatus;
+
+                  const mondayNightGame = activeWeekGames.find((game: Game) => game.is_monday_night);
+                  const mondayNightLocked = mondayNightGame ? isLocked(mondayNightGame.startTime) : false;
+                  const mondayNightFinal = mondayNightGame?.status === "Final";
+
+                  return (
+                    <tr key={user.user_id} className="hover:bg-gray-50">
+                      {/* Paid Column */}
+                      <td 
+                        className={`border border-gray-300 p-3 text-center font-semibold bg-yellow-50 ${
+                          isAdmin && !updatingPaidStatus ? 'cursor-pointer hover:bg-yellow-100 transition-colors' : ''
+                        }`}
+                        onClick={() => isAdmin && !updatingPaidStatus && setEditingPaidStatus(user.user_id)}
+                      >
+                        {updatingPaidStatus === user.user_id ? (
+                          <div className="flex items-center justify-center">
+                            <span className="text-gray-500">Updating...</span>
+                          </div>
+                        ) : editingPaidStatus === user.user_id ? (
+                          <div className="flex flex-col gap-1">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                togglePaidStatus(user.user_id);
+                              }}
+                              className={`px-2 py-1 rounded text-white text-sm ${
+                                userPaidStatus ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'
+                              }`}
+                            >
+                              {userPaidStatus ? 'Mark Unpaid' : 'Mark Paid'}
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingPaidStatus(null);
+                              }}
+                              className="px-2 py-1 bg-gray-500 text-white rounded text-sm hover:bg-gray-600"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-center gap-2">
+                            {userPaidStatus ? (
+                              <span className="text-green-600 text-xl" title="Paid">✓</span>
+                            ) : (
+                              <span className="text-red-500 text-xl" title="Not Paid">✗</span>
+                            )}
+                            {isAdmin && !updatingPaidStatus && (
+                              <span className="text-xs text-gray-500">Click to edit</span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Player name with hover/touch functionality */}
+                      <td 
+                        className={`border border-gray-300 p-3 font-semibold relative ${
+                          isMostCorrect || isClosestMonday 
+                            ? "bg-green-100 text-green-900 border-green-300" 
+                            : "bg-gray-50 text-gray-800"
+                        }`}
+                        onMouseEnter={() => setHoveredUser(user.user_id)}
+                        onMouseLeave={() => setHoveredUser(null)}
+                        onTouchStart={() => setHoveredUser(user.user_id)}
+                      >
+                        <div className="cursor-default">
+                          {user.email}
+                          {(isMostCorrect || isClosestMonday) && (
+                            <div className="text-xs text-green-700 mt-1">
+                              {isMostCorrect && "🏆 Most Correct "}
+                              {isClosestMonday && "🎯 Closest MNF"}
                             </div>
                           )}
-                        </td>
-                      );
-                    })}
+                        </div>
+                        
+                        {/* Hover/Touch Tooltip */}
+                        {(hoveredUser === user.user_id) && (
+                          <div className="absolute left-1/2 transform -translate-x-1/2 bottom-full mb-2 z-10 bg-gray-800 text-white text-sm px-3 py-2 rounded-lg shadow-lg whitespace-nowrap">
+                            <div className="font-semibold">
+                              {user.first_name} {user.last_name}
+                            </div>
+                            <div className="text-xs text-gray-300 mt-1">
+                              Click/touch to see full name
+                            </div>
+                            <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-800"></div>
+                          </div>
+                        )}
+                      </td>
 
-                    {/* Monday night pick column */}
-                    <td className={`border border-gray-300 p-3 font-semibold ${
-                      isClosestMonday 
-                        ? "bg-green-100 text-green-900 border-green-300" 
-                        : "bg-purple-50 text-gray-800"
-                    }`}>
-                      {mondayNightLocked 
-                        ? (stats.mondayNightPick !== null ? stats.mondayNightPick : "-") 
-                        : "❓"
-                      }
-                    </td>
-                    
-                    {/* Actual total column */}
-                    <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">
-                      {mondayNightFinal && stats.actualMondayTotal !== null ? stats.actualMondayTotal : "-"}
-                    </td>
-                    
-                    {/* Difference column */}
-                    <td className={`border border-gray-300 p-3 font-semibold ${
-                      isClosestMonday 
-                        ? "bg-green-100 text-green-900 border-green-300" 
-                        : "bg-purple-50 text-gray-800"
-                    }`}>
-                      {mondayNightFinal && stats.mondayNightDifference !== null ? stats.mondayNightDifference : "-"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                      {/* Correct picks */}
+                      <td className={`border border-gray-300 p-3 font-semibold ${
+                        isMostCorrect 
+                          ? "bg-green-100 text-green-900 border-green-300" 
+                          : "bg-blue-50 text-gray-800"
+                      }`}>
+                        {stats.correctPicks}/{stats.totalPicks}
+                      </td>
+
+                      {/* Percentage */}
+                      <td className={`border border-gray-300 p-3 font-semibold ${
+                        isMostCorrect 
+                          ? "bg-green-100 text-green-900 border-green-300" 
+                          : "bg-blue-50 text-gray-800"
+                      }`}>
+                        {stats.percentage}%
+                      </td>
+
+                      {/* Game picks */}
+                      {activeWeekGames.map((game: Game) => {
+                        const locked = isLocked(game.startTime);
+                        const userPick = picks.find(
+                          (p) => p.user_id === user.user_id && p.game_id === game.id
+                        );
+                        
+                        const showPick = locked;
+                        const displayPick = showPick ? (userPick?.selected_team ?? "") : "❓";
+                        
+                        const isCorrect = game.status === "Final" && 
+                                        userPick?.selected_team === game.winner;
+                        
+                        return (
+                          <td
+                            key={game.id}
+                            className={`border border-gray-300 p-3 text-center font-medium ${
+                              showPick 
+                                ? userPick 
+                                  ? isCorrect
+                                    ? "bg-green-100 text-green-900 border border-green-200"
+                                    : "bg-red-100 text-red-900 border border-red-200"
+                                  : "bg-red-100 text-red-900 border border-red-200"
+                                : "bg-gray-100 text-gray-600 border border-gray-200"
+                            }`}
+                          >
+                            {displayPick}
+                            {game.is_monday_night && locked && userPick?.total_points !== null && userPick?.total_points !== undefined && (
+                              <div className="text-xs text-purple-600 mt-1">
+                                Total: {userPick.total_points}
+                              </div>
+                            )}
+                          </td>
+                        );
+                      })}
+
+                      {/* Monday night pick column */}
+                      <td className={`border border-gray-300 p-3 font-semibold ${
+                        isClosestMonday 
+                          ? "bg-green-100 text-green-900 border-green-300" 
+                          : "bg-purple-50 text-gray-800"
+                      }`}>
+                        {mondayNightLocked 
+                          ? (stats.mondayNightPick !== null ? stats.mondayNightPick : "-") 
+                          : "❓"
+                        }
+                      </td>
+                      
+                      {/* Actual total column */}
+                      <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">
+                        {mondayNightFinal && stats.actualMondayTotal !== null ? stats.actualMondayTotal : "-"}
+                      </td>
+                      
+                      {/* Difference column */}
+                      <td className={`border border-gray-300 p-3 font-semibold ${
+                        isClosestMonday 
+                          ? "bg-green-100 text-green-900 border-green-300" 
+                          : "bg-purple-50 text-gray-800"
+                      }`}>
+                        {mondayNightFinal && stats.mondayNightDifference !== null ? stats.mondayNightDifference : "-"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : (
         <div className="text-center p-8 bg-gray-100 border border-gray-300 rounded-lg">
@@ -805,8 +882,8 @@ const AllPicksPage = () => {
             <span className="text-gray-800 font-medium">Monday night total (shown when final)</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="text-blue-600 font-medium">Click % or Player</span>
-            <span className="text-gray-800 font-medium">Sort by percentage or name</span>
+            <span className="text-blue-600 font-medium">Hover/Click Name</span>
+            <span className="text-gray-800 font-medium">See user's first and last name</span>
           </div>
         </div>
       </div>
