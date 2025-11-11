@@ -867,18 +867,18 @@ const AllPicksPage = () => {
                       </td>
 
                       {/* Correct picks - NOT Sticky */}
-                      <td className={`border border-gray-300 p-3 font-semibold ${
-                        isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-blue-50'
-                      }`}>
-                        {stats.correctPicks}/{stats.totalPicks}
-                      </td>
+                        <td className={`border border-gray-300 p-3 font-semibold ${
+                          isWinner ? getWinnerBackgroundColor() : 'bg-blue-50'
+                        } text-gray-900`}>
+                          {stats.correctPicks}/{stats.totalPicks}
+                        </td>
 
-                      {/* Percentage - NOT Sticky */}
-                      <td className={`border border-gray-300 p-3 font-semibold ${
-                        isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-blue-50'
-                      }`}>
-                        {stats.percentage}%
-                      </td>
+                        {/* Percentage - NOT Sticky */}
+                        <td className={`border border-gray-300 p-3 font-semibold ${
+                          isWinner ? getWinnerBackgroundColor() : 'bg-blue-50'
+                        } text-gray-900`}>
+                          {stats.percentage}%
+                        </td>
 
                       {/* Game picks - Scroll horizontally */}
                       {activeWeekGames.map((game: Game) => {
