@@ -28,9 +28,10 @@ type Pick = {
 
 type Profile = {
   user_id: string;
-  email: string;
+  username: string;
   first_name: string;
   last_name: string;
+  email: string;
   is_admin?: boolean;
 };
 
@@ -53,9 +54,12 @@ const AllPicksPage = () => {
   const [loading, setLoading] = useState(true);
   const [userStats, setUserStats] = useState<Record<string, UserStats>>({});
   const [bestPerformers, setBestPerformers] = useState<{
-    mostCorrect: string[];
-    closestMonday: string[];
-  }>({ mostCorrect: [], closestMonday: [] });
+    paidMostCorrect: string[];
+    unpaidMostCorrect: string[];
+  }>({ 
+    paidMostCorrect: [], 
+    unpaidMostCorrect: []
+  });
   const [sortBy, setSortBy] = useState<'percentage' | 'name'>('percentage');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -153,9 +157,10 @@ const AllPicksPage = () => {
         const { data: { user } } = await supabase.auth.getUser();
         setCurrentUser(user);
 
+        // UPDATED: Fetch username instead of email
         const { data: profileData } = await supabase
           .from("profiles")
-          .select("user_id, email, first_name, last_name, is_admin");
+          .select("user_id, username, first_name, last_name, email, is_admin");
         setProfiles(profileData || []);
 
         // Check if current user is admin
@@ -273,16 +278,15 @@ const AllPicksPage = () => {
     if (games.length === 0 || picks.length === 0 || profiles.length === 0 || !activeWeek) return;
 
     const stats: Record<string, UserStats> = {};
-    let maxCorrectPicks = 0;
-    let minMondayDifference = Infinity;
-    const usersWithMaxCorrect: string[] = [];
-    const usersWithClosestMonday: string[] = [];
+    
+    // Track best performances separately for paid and unpaid
+    let maxCorrectPicksPaid = 0;
+    let maxCorrectPicksUnpaid = 0;
 
     profiles.forEach(profile => {
       const userPicks = picks.filter(pick => pick.user_id === profile.user_id);
       const weekGames = games.filter(game => game.week === activeWeek);
       
-      // FIXED: Better logic to determine if user has made picks
       // Count how many picks they made for this week
       const picksForThisWeek = userPicks.filter(pick => 
         weekGames.some(game => game.id === pick.game_id)
@@ -293,7 +297,6 @@ const AllPicksPage = () => {
       const totalGamesInWeek = weekGames.length;
       
       let correctPicks = 0;
-      let totalPicksMade = picksForThisWeek.length;
 
       weekGames.forEach(game => {
         const userPick = userPicks.find(p => p.game_id === game.id);
@@ -330,45 +333,129 @@ const AllPicksPage = () => {
         hasMadePicks
       };
 
-      // Only consider users who made picks for best performer calculations
+      // Track best performances separately for paid and unpaid
+      const isPaid = paidStatus[profile.user_id] || false;
+      
       if (hasMadePicks) {
-        if (correctPicks > maxCorrectPicks) {
-          maxCorrectPicks = correctPicks;
-        }
-        if (mondayNightDifference !== null && mondayNightDifference < minMondayDifference) {
-          minMondayDifference = mondayNightDifference;
+        if (isPaid && correctPicks > maxCorrectPicksPaid) {
+          maxCorrectPicksPaid = correctPicks;
+        } else if (!isPaid && correctPicks > maxCorrectPicksUnpaid) {
+          maxCorrectPicksUnpaid = correctPicks;
         }
       }
     });
 
-    // Find best performers (only among users who made picks)
-    profiles.forEach(profile => {
+    console.log(`🎯 Finding winners for week ${activeWeek}`);
+    console.log(`💰 Max correct picks for PAID users: ${maxCorrectPicksPaid}`);
+    console.log(`🚫 Max correct picks for UNPAID users: ${maxCorrectPicksUnpaid}`);
+
+    // Find best performers separately for paid and unpaid
+    const paidUsersWithMaxCorrect: string[] = [];
+    const unpaidUsersWithMaxCorrect: string[] = [];
+
+    // Find all PAID users who have the maximum correct picks among paid users
+    const paidUsersWithPicks = profiles.filter(profile => {
       const userStat = stats[profile.user_id];
-      if (userStat.hasMadePicks && userStat.correctPicks === maxCorrectPicks && maxCorrectPicks > 0) {
-        usersWithMaxCorrect.push(profile.user_id);
-      }
-      if (userStat.hasMadePicks && userStat.mondayNightDifference === minMondayDifference && minMondayDifference !== Infinity) {
-        usersWithClosestMonday.push(profile.user_id);
-      }
+      const isPaid = paidStatus[profile.user_id] || false;
+      return isPaid && userStat.hasMadePicks && userStat.correctPicks === maxCorrectPicksPaid;
     });
+
+    console.log(`💰 Paid users with max correct (${maxCorrectPicksPaid}):`, paidUsersWithPicks.map(p => p.username));
+
+    // Find all UNPAID users who have the maximum correct picks among unpaid users
+    const unpaidUsersWithPicks = profiles.filter(profile => {
+      const userStat = stats[profile.user_id];
+      const isPaid = paidStatus[profile.user_id] || false;
+      return !isPaid && userStat.hasMadePicks && userStat.correctPicks === maxCorrectPicksUnpaid;
+    });
+
+    console.log(`🚫 Unpaid users with max correct (${maxCorrectPicksUnpaid}):`, unpaidUsersWithPicks.map(p => p.username));
+
+    // TIE-BREAKER LOGIC: Handle ties separately for paid and unpaid users
+    if (paidUsersWithPicks.length > 0) {
+      // Find the minimum Monday Night difference among paid users with max correct
+      let minMondayDifferencePaid = Infinity;
+      paidUsersWithPicks.forEach(profile => {
+        const userStat = stats[profile.user_id];
+        // Only consider users who made a Monday Night pick
+        if (userStat.mondayNightDifference !== null) {
+          if (userStat.mondayNightDifference < minMondayDifferencePaid) {
+            minMondayDifferencePaid = userStat.mondayNightDifference;
+          }
+        }
+      });
+
+      console.log(`📊 Min MNF difference for paid winners:`, minMondayDifferencePaid);
+
+      // If no paid users made MNF picks, all paid users with max correct are winners
+      if (minMondayDifferencePaid === Infinity) {
+        paidUsersWithPicks.forEach(profile => {
+          paidUsersWithMaxCorrect.push(profile.user_id);
+        });
+        console.log(`🏆 All paid users with max correct are winners (no MNF tie-breaker)`);
+      } else {
+        // Add all paid users with the minimum Monday Night difference
+        paidUsersWithPicks.forEach(profile => {
+          const userStat = stats[profile.user_id];
+          if (userStat.mondayNightDifference === minMondayDifferencePaid) {
+            paidUsersWithMaxCorrect.push(profile.user_id);
+          }
+        });
+        console.log(`🏆 Paid winners after MNF tie-breaker:`, paidUsersWithMaxCorrect);
+      }
+    }
+
+    if (unpaidUsersWithPicks.length > 0) {
+      // Find the minimum Monday Night difference among unpaid users with max correct
+      let minMondayDifferenceUnpaid = Infinity;
+      unpaidUsersWithPicks.forEach(profile => {
+        const userStat = stats[profile.user_id];
+        // Only consider users who made a Monday Night pick
+        if (userStat.mondayNightDifference !== null) {
+          if (userStat.mondayNightDifference < minMondayDifferenceUnpaid) {
+            minMondayDifferenceUnpaid = userStat.mondayNightDifference;
+          }
+        }
+      });
+
+      console.log(`📊 Min MNF difference for unpaid winners:`, minMondayDifferenceUnpaid);
+
+      // If no unpaid users made MNF picks, all unpaid users with max correct are winners
+      if (minMondayDifferenceUnpaid === Infinity) {
+        unpaidUsersWithPicks.forEach(profile => {
+          unpaidUsersWithMaxCorrect.push(profile.user_id);
+        });
+        console.log(`🥈 All unpaid users with max correct are winners (no MNF tie-breaker)`);
+      } else {
+        // Add all unpaid users with the minimum Monday Night difference
+        unpaidUsersWithPicks.forEach(profile => {
+          const userStat = stats[profile.user_id];
+          if (userStat.mondayNightDifference === minMondayDifferenceUnpaid) {
+            unpaidUsersWithMaxCorrect.push(profile.user_id);
+          }
+        });
+        console.log(`🥈 Unpaid winners after MNF tie-breaker:`, unpaidUsersWithMaxCorrect);
+      }
+    }
 
     setUserStats(stats);
     setBestPerformers({
-      mostCorrect: usersWithMaxCorrect,
-      closestMonday: usersWithClosestMonday
+      paidMostCorrect: paidUsersWithMaxCorrect,
+      unpaidMostCorrect: unpaidUsersWithMaxCorrect
     });
 
     // DEBUG: Log which users are being shown
-    console.log("📊 Users with picks for week", activeWeek, ":");
+    console.log("📊 FINAL RESULTS for week", activeWeek, ":");
+    console.log("🏆 Paid Most Correct:", paidUsersWithMaxCorrect);
+    console.log("🥈 Unpaid Most Correct:", unpaidUsersWithMaxCorrect);
+    
     profiles.forEach(profile => {
       const userStat = stats[profile.user_id];
       if (userStat.hasMadePicks) {
-        console.log(`✅ ${profile.email}: ${userStat.correctPicks}/${userStat.totalPicks} correct`);
-      } else {
-        console.log(`❌ ${profile.email}: No picks made`);
+        console.log(`✅ ${profile.username}: ${userStat.correctPicks}/${userStat.totalPicks} correct, MNF Diff: ${userStat.mondayNightDifference}, Paid: ${paidStatus[profile.user_id]}`);
       }
     });
-  }, [games, picks, profiles, activeWeek]);
+  }, [games, picks, profiles, activeWeek, paidStatus]);
 
   // ---------- Timer (needed for locked games) ----------
   useEffect(() => {
@@ -404,9 +491,9 @@ const AllPicksPage = () => {
         }
       } else {
         if (sortOrder === 'desc') {
-          return b.email.localeCompare(a.email);
+          return b.username.localeCompare(a.username);
         } else {
-          return a.email.localeCompare(b.email);
+          return a.username.localeCompare(b.username);
         }
       }
     });
@@ -555,8 +642,8 @@ const AllPicksPage = () => {
             <table className="table-auto border-collapse w-full text-center">
               <thead className="sticky top-0 bg-gray-100 z-10">
                 <tr>
-                  {/* Paid Column */}
-                  <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-yellow-100 sticky top-0">
+                  {/* Paid Column - Sticky */}
+                  <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-yellow-100 sticky top-0 left-0 z-20">
                     Paid
                     {isAdmin && (
                       <div className="text-xs font-normal text-gray-600 mt-1">
@@ -564,7 +651,9 @@ const AllPicksPage = () => {
                       </div>
                     )}
                   </th>
-                  <th className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0">
+                  
+                  {/* Player Column - Sticky */}
+                  <th className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0 left-[68px] z-20 bg-gray-100">
                     <button 
                       onClick={() => handleSortClick('name')}
                       className="hover:bg-gray-200 px-2 py-1 rounded transition-colors flex items-center gap-1 mx-auto"
@@ -577,8 +666,12 @@ const AllPicksPage = () => {
                       )}
                     </button>
                   </th>
-                  <th className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0">Correct</th>
-                  <th className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0">
+                  
+                  {/* Correct Column - Sticky */}
+                  <th className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0 left-[200px] z-20 bg-gray-100">Correct</th>
+                  
+                  {/* Percentage Column - Sticky */}
+                  <th className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0 left-[280px] z-20 bg-gray-100">
                     <button 
                       onClick={() => handleSortClick('percentage')}
                       className="hover:bg-gray-200 px-2 py-1 rounded transition-colors flex items-center gap-1 mx-auto"
@@ -591,6 +684,8 @@ const AllPicksPage = () => {
                       )}
                     </button>
                   </th>
+                  
+                  {/* Game columns - Scroll horizontally */}
                   {activeWeekGames.map((game) => (
                     <th key={game.id} className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0">
                       {formatGameLabel(game)}
@@ -599,6 +694,8 @@ const AllPicksPage = () => {
                       </div>
                     </th>
                   ))}
+                  
+                  {/* MNF columns - Scroll horizontally */}
                   <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-purple-100 sticky top-0">MNF Pick</th>
                   <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-purple-100 sticky top-0">Actual Total</th>
                   <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-purple-100 sticky top-0">Difference</th>
@@ -607,12 +704,15 @@ const AllPicksPage = () => {
               <tbody>
                 {/* Locked row */}
                 <tr className="bg-gray-200">
-                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-yellow-50">
+                  {/* Sticky columns for locked row */}
+                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-yellow-50 sticky left-0 z-10">
                     -
                   </td>
-                  <td className="border border-gray-300 p-3 font-semibold text-gray-800">-</td>
-                  <td className="border border-gray-300 p-3 font-semibold text-gray-800">-</td>
-                  <td className="border border-gray-300 p-3 font-semibold text-gray-800">-</td>
+                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 sticky left-[68px] z-10 bg-gray-200">-</td>
+                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 sticky left-[200px] z-10 bg-gray-200">-</td>
+                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 sticky left-[280px] z-10 bg-gray-200">-</td>
+                  
+                  {/* Game columns */}
                   {activeWeekGames.map((game) => {
                     const locked = isLocked(game.startTime);
                     return (
@@ -629,6 +729,8 @@ const AllPicksPage = () => {
                       </td>
                     );
                   })}
+                  
+                  {/* MNF columns */}
                   <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">-</td>
                   <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">-</td>
                   <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">-</td>
@@ -647,19 +749,40 @@ const AllPicksPage = () => {
 
                   const userPaidStatus = paidStatus[user.user_id] || false;
                   
-                  const isMostCorrect = bestPerformers.mostCorrect.includes(user.user_id) && userPaidStatus;
-                  const isClosestMonday = bestPerformers.closestMonday.includes(user.user_id) && userPaidStatus;
+                  // Determine winner status - unpaid winners highlighted in orange, paid winners in green
+                  const isPaidMostCorrect = bestPerformers.paidMostCorrect.includes(user.user_id);
+                  const isUnpaidMostCorrect = bestPerformers.unpaidMostCorrect.includes(user.user_id);
+
+                  // NEW LOGIC: Highlight unpaid winners in orange, paid winners in green
+                  const isWinner = isPaidMostCorrect || isUnpaidMostCorrect;
+                  const isPaidWinner = isPaidMostCorrect;
+                  const isUnpaidWinner = isUnpaidMostCorrect;
 
                   const mondayNightGame = activeWeekGames.find((game: Game) => game.is_monday_night);
                   const mondayNightLocked = mondayNightGame ? isLocked(mondayNightGame.startTime) : false;
                   const mondayNightFinal = mondayNightGame?.status === "Final";
 
+                  // Determine background colors based on winner status
+                  const getWinnerBackgroundColor = () => {
+                    if (isPaidWinner) return "bg-green-100 border-green-300";
+                    if (isUnpaidWinner) return "bg-orange-100 border-orange-300";
+                    return "";
+                  };
+
+                  const getWinnerTextColor = () => {
+                    if (isPaidWinner) return "text-green-900";
+                    if (isUnpaidWinner) return "text-orange-900";
+                    return "text-gray-800";
+                  };
+
                   return (
-                    <tr key={user.user_id} className="hover:bg-gray-50">
-                      {/* Paid Column */}
+                    <tr key={user.user_id} className={`hover:bg-gray-50 ${isWinner ? getWinnerBackgroundColor() : ''}`}>
+                      {/* Paid Column - Sticky */}
                       <td 
-                        className={`border border-gray-300 p-3 text-center font-semibold bg-yellow-50 ${
-                          isAdmin && !updatingPaidStatus ? 'cursor-pointer hover:bg-yellow-100 transition-colors' : ''
+                        className={`border border-gray-300 p-3 text-center font-semibold sticky left-0 z-10 ${
+                          isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-yellow-50'
+                        } ${
+                          isAdmin && !updatingPaidStatus ? 'cursor-pointer hover:opacity-80 transition-colors' : ''
                         }`}
                         onClick={() => isAdmin && !updatingPaidStatus && setEditingPaidStatus(user.user_id)}
                       >
@@ -704,60 +827,54 @@ const AllPicksPage = () => {
                         )}
                       </td>
 
-                      {/* Player name with hover/touch functionality */}
+                      {/* Player name with hover/touch functionality - Sticky */}
                       <td 
-                        className={`border border-gray-300 p-3 font-semibold relative ${
-                          isMostCorrect || isClosestMonday 
-                            ? "bg-green-100 text-green-900 border-green-300" 
-                            : "bg-gray-50 text-gray-800"
+                        className={`border border-gray-300 p-3 font-semibold relative sticky left-[68px] z-10 ${
+                          isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-gray-50'
                         }`}
                         onMouseEnter={() => setHoveredUser(user.user_id)}
                         onMouseLeave={() => setHoveredUser(null)}
                         onTouchStart={() => setHoveredUser(user.user_id)}
                       >
                         <div className="cursor-default">
-                          {user.email}
-                          {(isMostCorrect || isClosestMonday) && (
-                            <div className="text-xs text-green-700 mt-1">
-                              {isMostCorrect && "🏆 Most Correct "}
-                              {isClosestMonday && "🎯 Closest MNF"}
-                            </div>
-                          )}
+                          {/* UPDATED: Show username instead of email */}
+                          {user.username}
+                          {isPaidWinner && <div className="text-xs text-green-700 mt-1">🏆 Most Correct (Paid Winner)</div>}
+                          {isUnpaidWinner && <div className="text-xs text-orange-700 mt-1">🥈 Most Correct (Would Have Won)</div>}
                         </div>
                         
                         {/* Hover/Touch Tooltip */}
                         {(hoveredUser === user.user_id) && (
-                          <div className="absolute left-1/2 transform -translate-x-1/2 bottom-full mb-2 z-10 bg-gray-800 text-white text-sm px-3 py-2 rounded-lg shadow-lg whitespace-nowrap">
+                          <div className="absolute left-1/2 transform -translate-x-1/2 bottom-full mb-2 z-30 bg-gray-800 text-white text-sm px-3 py-2 rounded-lg shadow-lg whitespace-nowrap">
                             <div className="font-semibold">
                               {user.first_name} {user.last_name}
                             </div>
                             <div className="text-xs text-gray-300 mt-1">
-                              Click/touch to see full name
+                              {user.email}
+                            </div>
+                            <div className="text-xs text-gray-300 mt-1">
+                              {userPaidStatus ? "Paid ✅" : "Not Paid ❌"}
                             </div>
                             <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-800"></div>
                           </div>
                         )}
                       </td>
 
-                      {/* Correct picks */}
-                      <td className={`border border-gray-300 p-3 font-semibold ${
-                        isMostCorrect 
-                          ? "bg-green-100 text-green-900 border-green-300" 
-                          : "bg-blue-50 text-gray-800"
+                      {/* Correct picks - Sticky */}
+                      <td className={`border border-gray-300 p-3 font-semibold sticky left-[200px] z-10 ${
+                        isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-blue-50'
                       }`}>
                         {stats.correctPicks}/{stats.totalPicks}
                       </td>
 
-                      {/* Percentage */}
-                      <td className={`border border-gray-300 p-3 font-semibold ${
-                        isMostCorrect 
-                          ? "bg-green-100 text-green-900 border-green-300" 
-                          : "bg-blue-50 text-gray-800"
+                      {/* Percentage - Sticky */}
+                      <td className={`border border-gray-300 p-3 font-semibold sticky left-[280px] z-10 ${
+                        isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-blue-50'
                       }`}>
                         {stats.percentage}%
                       </td>
 
-                      {/* Game picks */}
+                      {/* Game picks - Scroll horizontally */}
                       {activeWeekGames.map((game: Game) => {
                         const locked = isLocked(game.startTime);
                         const userPick = picks.find(
@@ -781,7 +898,7 @@ const AllPicksPage = () => {
                                     : "bg-red-100 text-red-900 border border-red-200"
                                   : "bg-red-100 text-red-900 border border-red-200"
                                 : "bg-gray-100 text-gray-600 border border-gray-200"
-                            }`}
+                            } ${isWinner ? getWinnerBackgroundColor() : ''}`}
                           >
                             {displayPick}
                             {game.is_monday_night && locked && userPick?.total_points !== null && userPick?.total_points !== undefined && (
@@ -795,9 +912,7 @@ const AllPicksPage = () => {
 
                       {/* Monday night pick column */}
                       <td className={`border border-gray-300 p-3 font-semibold ${
-                        isClosestMonday 
-                          ? "bg-green-100 text-green-900 border-green-300" 
-                          : "bg-purple-50 text-gray-800"
+                        isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-purple-50'
                       }`}>
                         {mondayNightLocked 
                           ? (stats.mondayNightPick !== null ? stats.mondayNightPick : "-") 
@@ -812,9 +927,7 @@ const AllPicksPage = () => {
                       
                       {/* Difference column */}
                       <td className={`border border-gray-300 p-3 font-semibold ${
-                        isClosestMonday 
-                          ? "bg-green-100 text-green-900 border-green-300" 
-                          : "bg-purple-50 text-gray-800"
+                        isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-purple-50'
                       }`}>
                         {mondayNightFinal && stats.mondayNightDifference !== null ? stats.mondayNightDifference : "-"}
                       </td>
@@ -853,11 +966,11 @@ const AllPicksPage = () => {
           </div>
           <div className="flex items-center gap-3">
             <span className="bg-green-100 text-green-900 px-2 py-1 rounded border border-green-300 font-medium">🏆</span>
-            <span className="text-gray-800 font-medium">Most correct picks this week (Paid users only)</span>
+            <span className="text-gray-800 font-medium">Most correct picks (Paid winners - Green)</span>
           </div>
           <div className="flex items-center gap-3">
-            <span className="bg-green-100 text-green-900 px-2 py-1 rounded border border-green-300 font-medium">🎯</span>
-            <span className="text-gray-800 font-medium">Closest Monday night pick (Paid users only)</span>
+            <span className="bg-orange-100 text-orange-900 px-2 py-1 rounded border border-orange-300 font-medium">🥈</span>
+            <span className="text-gray-800 font-medium">Would have won (Unpaid winners - Orange)</span>
           </div>
           {isAdmin && (
             <div className="flex items-center gap-3">

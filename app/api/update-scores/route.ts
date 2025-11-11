@@ -31,7 +31,7 @@ async function getCurrentWeek(): Promise<number | null> {
     
     const { data: games, error } = await supabase
       .from("games")
-      .select("week, start_time, status, team_a, team_b")
+      .select("week, start_time, status, team_a, team_b, is_monday_night")
       .order("week", { ascending: true });
 
     if (error) {
@@ -223,18 +223,24 @@ export async function GET() {
         `🎯 ESPN Game: ${dbAwayTeam} @ ${dbHomeTeam} | Status: ${status} | Scores: ${awayScore}-${homeScore} | Winner: ${winner}`
       );
 
-      // Calculate total points for Monday night game
+      // FIXED Monday night detection - Use database flag instead of ESPN data
       let actualTotalPoints = null;
-      const gameDate = new Date(event.date);
       
-      // Improved Monday night detection
-      const isMondayNight = event.name?.toLowerCase().includes('monday night') || 
-                           (gameDate.getUTCDay() === 1 && gameDate.getUTCHours() >= 1);
-      
-      if (isMondayNight && status === "Final") {
+      // Check if this game is marked as Monday Night in our database
+      const isMondayNightInDB = existingGames?.some(game => 
+        (game.team_a === dbHomeTeam && game.team_b === dbAwayTeam && game.is_monday_night) ||
+        (game.team_a === dbAwayTeam && game.team_b === dbHomeTeam && game.is_monday_night)
+      );
+
+      console.log(`🏈 MNF Check: DB says is_monday_night=${isMondayNightInDB} for ${dbAwayTeam} @ ${dbHomeTeam}`);
+
+      // Update Monday night total points if the game is marked as MNF in our database AND is final
+      if (isMondayNightInDB && status === "Final") {
         if (homeScore !== null && awayScore !== null) {
           actualTotalPoints = homeScore + awayScore;
-          console.log(`🏈 Monday Night Total Points: ${actualTotalPoints}`);
+          console.log(`🏈 Monday Night Total Points: ${actualTotalPoints} (${homeScore} + ${awayScore})`);
+        } else {
+          console.log(`🏈 MNF Game is final but missing scores: ${awayScore}-${homeScore}`);
         }
       }
 
@@ -249,6 +255,7 @@ export async function GET() {
       if (actualTotalPoints !== null) {
         updateData.actual_total_points = actualTotalPoints;
         mondayNightGameUpdated = true;
+        console.log(`💾 Will update MNF total points: ${actualTotalPoints}`);
       }
 
       // First try: match exactly as ESPN provides (team_a = home, team_b = away)
@@ -266,6 +273,9 @@ export async function GET() {
         console.error(`❌ Update failed:`, error);
       } else if (updateResult && updateResult.length > 0) {
         console.log(`✅ Update succeeded: Updated ${updateResult.length} row(s)`);
+        if (actualTotalPoints !== null) {
+          console.log(`💰 MNF Total Points Updated: ${actualTotalPoints}`);
+        }
         updatedCount++;
         continue; // Move to next game
       } else {
@@ -286,16 +296,63 @@ export async function GET() {
           console.error(`❌ Reverse update failed:`, reverseError);
         } else if (reverseResult && reverseResult.length > 0) {
           console.log(`✅ Reverse update succeeded: Updated ${reverseResult.length} row(s)`);
+          if (actualTotalPoints !== null) {
+            console.log(`💰 MNF Total Points Updated: ${actualTotalPoints}`);
+          }
           updatedCount++;
         } else {
           console.log(`❌ Both update attempts failed for ${dbAwayTeam} @ ${dbHomeTeam} in week ${currentWeek}`);
+          
+          // Third try: Check if the game exists in our database with different team order
+          console.log(`🔄 Attempt 3: Searching for any game with these teams in week ${currentWeek}`);
+          const { data: anyGame, error: anyError } = await supabase
+            .from("games")
+            .select("*")
+            .eq("week", currentWeek)
+            .or(`and(team_a.eq.${dbHomeTeam},team_b.eq.${dbAwayTeam}),and(team_a.eq.${dbAwayTeam},team_b.eq.${dbHomeTeam})`)
+            .select();
+
+          if (anyError) {
+            console.error(`❌ Search failed:`, anyError);
+          } else if (anyGame && anyGame.length > 0) {
+            console.log(`🔍 Found game with ID: ${anyGame[0].id}, teams: ${anyGame[0].team_a} vs ${anyGame[0].team_b}, is_monday_night: ${anyGame[0].is_monday_night}`);
+            
+            // Check if this is the MNF game from database
+            if (anyGame[0].is_monday_night && status === "Final" && homeScore !== null && awayScore !== null) {
+              const mnfTotal = homeScore + awayScore;
+              console.log(`🏈 Database MNF Game Found: ${anyGame[0].team_b} @ ${anyGame[0].team_a}, Total Points: ${mnfTotal}`);
+              updateData.actual_total_points = mnfTotal;
+              mondayNightGameUpdated = true;
+            }
+            
+            // Update by ID
+            const { data: idResult, error: idError } = await supabase
+              .from("games")
+              .update(updateData)
+              .eq("id", anyGame[0].id)
+              .select();
+
+            if (idError) {
+              console.error(`❌ ID-based update failed:`, idError);
+            } else if (idResult && idResult.length > 0) {
+              console.log(`✅ ID-based update succeeded: Updated ${idResult.length} row(s)`);
+              if (updateData.actual_total_points) {
+                console.log(`💰 MNF Total Points Updated: ${updateData.actual_total_points}`);
+              }
+              updatedCount++;
+            }
+          } else {
+            console.log(`❌ Game not found in database at all: ${dbAwayTeam} @ ${dbHomeTeam}`);
+          }
         }
       }
     }
 
     console.log(`🎉 Successfully updated ${updatedCount} games for week ${currentWeek}`);
     if (mondayNightGameUpdated) {
-      console.log("🏈 Monday night game total points updated");
+      console.log("🏈 Monday night game total points were updated");
+    } else {
+      console.log("❌ No Monday night game total points were updated - check if MNF game is marked in database");
     }
 
     return NextResponse.json({ 
