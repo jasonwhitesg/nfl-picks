@@ -642,8 +642,8 @@ const AllPicksPage = () => {
             <table className="table-auto border-collapse w-full text-center">
               <thead className="sticky top-0 bg-gray-100 z-10">
                 <tr>
-                  {/* Paid Column - Sticky */}
-                  <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-yellow-100 sticky top-0 left-0 z-20">
+                  {/* Paid Column - NOT Sticky */}
+                  <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-yellow-100">
                     Paid
                     {isAdmin && (
                       <div className="text-xs font-normal text-gray-600 mt-1">
@@ -653,7 +653,7 @@ const AllPicksPage = () => {
                   </th>
                   
                   {/* Player Column - Sticky */}
-                  <th className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0 left-[68px] z-20 bg-gray-100">
+                  <th className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0 left-0 z-20 bg-gray-100">
                     <button 
                       onClick={() => handleSortClick('name')}
                       className="hover:bg-gray-200 px-2 py-1 rounded transition-colors flex items-center gap-1 mx-auto"
@@ -667,11 +667,11 @@ const AllPicksPage = () => {
                     </button>
                   </th>
                   
-                  {/* Correct Column - Sticky */}
-                  <th className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0 left-[200px] z-20 bg-gray-100">Correct</th>
+                  {/* Correct Column - NOT Sticky */}
+                  <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-gray-100">Correct</th>
                   
-                  {/* Percentage Column - Sticky */}
-                  <th className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0 left-[280px] z-20 bg-gray-100">
+                  {/* Percentage Column - NOT Sticky */}
+                  <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-gray-100">
                     <button 
                       onClick={() => handleSortClick('percentage')}
                       className="hover:bg-gray-200 px-2 py-1 rounded transition-colors flex items-center gap-1 mx-auto"
@@ -704,13 +704,19 @@ const AllPicksPage = () => {
               <tbody>
                 {/* Locked row */}
                 <tr className="bg-gray-200">
-                  {/* Sticky columns for locked row */}
-                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-yellow-50 sticky left-0 z-10">
+                  {/* Paid Column - NOT Sticky */}
+                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-yellow-50">
                     -
                   </td>
-                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 sticky left-[68px] z-10 bg-gray-200">-</td>
-                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 sticky left-[200px] z-10 bg-gray-200">-</td>
-                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 sticky left-[280px] z-10 bg-gray-200">-</td>
+                  
+                  {/* Player Column - Sticky */}
+                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 sticky left-0 z-10 bg-gray-200">-</td>
+                  
+                  {/* Correct Column - NOT Sticky */}
+                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-gray-200">-</td>
+                  
+                  {/* Percentage Column - NOT Sticky */}
+                  <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-gray-200">-</td>
                   
                   {/* Game columns */}
                   {activeWeekGames.map((game) => {
@@ -777,9 +783,9 @@ const AllPicksPage = () => {
 
                   return (
                     <tr key={user.user_id} className={`hover:bg-gray-50 ${isWinner ? getWinnerBackgroundColor() : ''}`}>
-                      {/* Paid Column - Sticky */}
+                      {/* Paid Column - NOT Sticky */}
                       <td 
-                        className={`border border-gray-300 p-3 text-center font-semibold sticky left-0 z-10 ${
+                        className={`border border-gray-300 p-3 text-center font-semibold ${
                           isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-yellow-50'
                         } ${
                           isAdmin && !updatingPaidStatus ? 'cursor-pointer hover:opacity-80 transition-colors' : ''
@@ -829,7 +835,7 @@ const AllPicksPage = () => {
 
                       {/* Player name with hover/touch functionality - Sticky */}
                       <td 
-                        className={`border border-gray-300 p-3 font-semibold relative sticky left-[68px] z-10 ${
+                        className={`border border-gray-300 p-3 font-semibold relative sticky left-0 z-10 ${
                           isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-gray-50'
                         }`}
                         onMouseEnter={() => setHoveredUser(user.user_id)}
@@ -860,15 +866,15 @@ const AllPicksPage = () => {
                         )}
                       </td>
 
-                      {/* Correct picks - Sticky */}
-                      <td className={`border border-gray-300 p-3 font-semibold sticky left-[200px] z-10 ${
+                      {/* Correct picks - NOT Sticky */}
+                      <td className={`border border-gray-300 p-3 font-semibold ${
                         isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-blue-50'
                       }`}>
                         {stats.correctPicks}/{stats.totalPicks}
                       </td>
 
-                      {/* Percentage - Sticky */}
-                      <td className={`border border-gray-300 p-3 font-semibold sticky left-[280px] z-10 ${
+                      {/* Percentage - NOT Sticky */}
+                      <td className={`border border-gray-300 p-3 font-semibold ${
                         isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-blue-50'
                       }`}>
                         {stats.percentage}%
