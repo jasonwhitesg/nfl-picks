@@ -15,7 +15,7 @@ type Game = {
   away_score?: number | null;
   winner?: string | null;
   status?: string | null;
-  is_monday_night?: boolean;
+  is_monday_night: boolean;
   actual_total_points?: number | null;
 };
 
@@ -400,7 +400,14 @@ const MakePicksPage = () => {
     router.push("/login");
   };
 
-  const selectPick = async (gameId: string, team: string, lockTime: string) => {
+  const selectPick = async (gameId: string, team: string, lockTime: string, isMondayNight: boolean) => {
+    // FIXED: Proper null check for Monday night totals
+    const currentTotal = mondayNightTotals[gameId];
+    if (isMondayNight && (currentTotal === null || currentTotal === undefined || currentTotal <= 0)) {
+      alert("You must set a valid Monday Night Football total points (greater than 0) before making your pick.");
+      return;
+    }
+
     if (isLocked(lockTime)) {
       alert("This game is locked. You cannot change your pick.");
       return;
@@ -419,7 +426,7 @@ const MakePicksPage = () => {
           selected_team: team,
           lock_time: lockTime,
           is_locked: false,
-          total_points: mondayNightTotals[gameId] || null
+          total_points: currentTotal || null
         }, {
           onConflict: 'user_id,game_id'
         });
@@ -468,38 +475,46 @@ const MakePicksPage = () => {
     }
   };
 
-  const handleMondayNightTotalChange = async (gameId: string, value: number | null) => {
+  const handleMondayNightTotalChange = async (gameId: string, value: string) => {
     if (!userId) return;
+    
+    // FIXED: Convert empty string to null, otherwise parse as number
+    const totalPoints = value === '' ? null : parseInt(value);
     
     setMondayNightTotals(prev => ({
       ...prev,
-      [gameId]: value
+      [gameId]: totalPoints
     }));
 
-    if (picks[gameId]) {
+    // Only save to database if it's a valid number (not null)
+    if (totalPoints !== null) {
       try {
         const { error } = await supabase
           .from("game_picks")
-          .update({ total_points: value })
+          .update({ total_points: totalPoints })
           .eq("user_id", userId)
           .eq("game_id", gameId);
 
         if (error) {
           console.error("Error saving total score:", error);
           alert("Error saving total score. Please try again.");
+          // FIXED: Proper null check when reverting
+          const previousTotal = mondayNightTotals[gameId];
           setMondayNightTotals(prev => ({
             ...prev,
-            [gameId]: mondayNightTotals[gameId]
+            [gameId]: previousTotal
           }));
         } else {
-          addDebugInfo(`✅ Total points saved: ${value} for game ${gameId}`);
+          addDebugInfo(`✅ Total points saved: ${totalPoints} for game ${gameId}`);
         }
       } catch (err) {
         console.error("Error saving total score:", err);
         alert("Error saving total score. Please try again.");
+        // FIXED: Proper null check when reverting
+        const previousTotal = mondayNightTotals[gameId];
         setMondayNightTotals(prev => ({
           ...prev,
-          [gameId]: mondayNightTotals[gameId]
+          [gameId]: previousTotal
         }));
       }
     }
@@ -676,26 +691,32 @@ const MakePicksPage = () => {
           const isFinal = g.status === "Final";
           const isLive = g.status === "InProgress";
           const isMondayNight = g.is_monday_night;
-          const userHasSetTotal = mondayNightTotals[g.id] !== null;
+          // FIXED: Proper null check for userHasSetTotal
+          const currentTotal = mondayNightTotals[g.id];
+          const userHasSetTotal = currentTotal !== null && currentTotal !== undefined && currentTotal > 0;
           const actualTotal = g.home_score != null && g.away_score != null ? g.home_score + g.away_score : null;
 
           const pickCorrect = isFinal && pick ? (pick === g.winner ? true : false) : null;
 
+          // FIXED: Determine if Monday night buttons should be disabled
+          const mondayNightButtonsDisabled = isMondayNight && !isFinal && !locked && !userHasSetTotal;
+
           const teamBtn = (team: string) => {
             let base = "px-4 py-2 rounded-md font-semibold transition-all text-center min-w-[80px]";
 
-            if (pick === team && !isFinal) {
+            // FIXED: Handle Monday night disabled state
+            if (mondayNightButtonsDisabled) {
+              base += " bg-gray-100 text-gray-400 cursor-not-allowed";
+            } else if (pick === team && !isFinal) {
               base += " bg-blue-500 text-white";
-            }
-
-            if (pick === team && isFinal) {
+            } else if (pick === team && isFinal) {
               base += pickCorrect
                 ? " bg-green-500 text-white"
                 : " bg-red-500 text-white";
-            }
-
-            if (locked && pick !== team) {
+            } else if (locked && pick !== team) {
               base += " bg-gray-100 text-gray-500 cursor-not-allowed";
+            } else {
+              base += " bg-gray-200 text-gray-800 hover:bg-gray-300 cursor-pointer";
             }
 
             return base;
@@ -760,7 +781,7 @@ const MakePicksPage = () => {
                         Actual Total Points: <span className="text-lg font-bold text-purple-800">{actualTotal}</span>
                         {userHasSetTotal && (
                           <span className="text-gray-800 ml-2 font-medium">
-                            (Your pick: <span className="text-lg font-bold text-purple-800">{mondayNightTotals[g.id]}</span>)
+                            (Your pick: <span className="text-lg font-bold text-purple-800">{currentTotal}</span>)
                           </span>
                         )}
                       </div>
@@ -772,19 +793,19 @@ const MakePicksPage = () => {
                 {isMondayNight && !isFinal && !locked && (
                   <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 mt-2 w-full">
                     <div className="text-sm font-semibold text-purple-800 mb-3 text-center">
-                      Set Monday Night Total Points (Locks when game starts)
+                      Set Monday Night Total Points (Required before making pick)
                     </div>
                     <div className="flex justify-center items-center gap-3">
                       <div className="flex flex-col items-center gap-2">
                         <label className="text-sm font-medium text-gray-700">Total Points</label>
                         <input
                           type="number"
-                          min="0"
+                          min="1"  // FIXED: Changed from 0 to 1 to prevent 0 values
                           max="100"
-                          value={mondayNightTotals[g.id] ?? ''}
-                          onChange={(e) => handleMondayNightTotalChange(g.id, e.target.value ? parseInt(e.target.value) : null)}
+                          value={currentTotal ?? ''}
+                          onChange={(e) => handleMondayNightTotalChange(g.id, e.target.value)}
                           className="w-24 px-3 py-2 border-2 border-purple-300 rounded text-center font-bold text-lg text-purple-800 bg-white"
-                          placeholder="0"
+                          placeholder="Enter total"
                           disabled={savingScore === g.id}
                           style={{
                             fontSize: '1.125rem',
@@ -796,7 +817,12 @@ const MakePicksPage = () => {
                     </div>
                     {userHasSetTotal && (
                       <div className="text-sm font-semibold text-purple-800 text-center mt-2">
-                        Total points set: <span className="text-lg font-bold">{mondayNightTotals[g.id]}</span> (will lock when game starts)
+                        Total points set: <span className="text-lg font-bold">{currentTotal}</span> - You can now make your pick!
+                      </div>
+                    )}
+                    {!userHasSetTotal && (
+                      <div className="text-sm font-semibold text-red-600 text-center mt-2">
+                        ⚠️ You must set total points (greater than 0) before making your pick
                       </div>
                     )}
                     {savingScore === g.id && (
@@ -811,7 +837,7 @@ const MakePicksPage = () => {
                 {isMondayNight && !isFinal && locked && userHasSetTotal && (
                   <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mt-2 w-full">
                     <div className="text-sm font-semibold text-yellow-800 text-center">
-                      Total Points Locked: <span className="text-lg font-bold text-yellow-900">{mondayNightTotals[g.id]}</span>
+                      Total Points Locked: <span className="text-lg font-bold text-yellow-900">{currentTotal}</span>
                     </div>
                     <div className="text-xs text-yellow-600 text-center mt-1">
                       Waiting for final score...
@@ -840,10 +866,10 @@ const MakePicksPage = () => {
                     </div>
                     {isMondayNight && userHasSetTotal && (
                       <div className={`text-sm mt-1 font-semibold ${
-                        mondayNightTotals[g.id] === actualTotal ? 'text-green-700' : 'text-red-700'
+                        currentTotal === actualTotal ? 'text-green-700' : 'text-red-700'
                       }`}>
-                        Total Points: <span className="text-lg font-bold">{mondayNightTotals[g.id]}</span> vs Actual: <span className="text-lg font-bold">{actualTotal}</span> - 
-                        {mondayNightTotals[g.id] === actualTotal ? ' ✓ Correct' : ' ✗ Incorrect'}
+                        Total Points: <span className="text-lg font-bold">{currentTotal}</span> vs Actual: <span className="text-lg font-bold">{actualTotal}</span> - 
+                        {currentTotal === actualTotal ? ' ✓ Correct' : ' ✗ Incorrect'}
                       </div>
                     )}
                   </div>
@@ -864,16 +890,18 @@ const MakePicksPage = () => {
                 <div className="flex justify-center items-center gap-3">
                   <div className="flex flex-wrap justify-center gap-3">
                     <button
-                      disabled={locked}
-                      onClick={() => selectPick(g.id, g.homeTeam, g.start_time)}
+                      disabled={locked || mondayNightButtonsDisabled}
+                      onClick={() => selectPick(g.id, g.homeTeam, g.start_time, isMondayNight)}
                       className={teamBtn(g.homeTeam) + " transform transition-transform hover:scale-105"}
+                      title={mondayNightButtonsDisabled ? "Set total points first" : ""}
                     >
                       {g.homeTeam}
                     </button>
                     <button
-                      disabled={locked}
-                      onClick={() => selectPick(g.id, g.awayTeam, g.start_time)}
+                      disabled={locked || mondayNightButtonsDisabled}
+                      onClick={() => selectPick(g.id, g.awayTeam, g.start_time, isMondayNight)}
                       className={teamBtn(g.awayTeam) + " transform transition-transform hover:scale-105"}
+                      title={mondayNightButtonsDisabled ? "Set total points first" : ""}
                     >
                       {g.awayTeam}
                     </button>
