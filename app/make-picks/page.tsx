@@ -35,9 +35,12 @@ const MakePicksPage = () => {
   const [savingScore, setSavingScore] = useState<string | null>(null);
   const [showDebug, setShowDebug] = useState(false);
   const [debugInfo, setDebugInfo] = useState<string[]>([]);
-  const [userSelectedWeek, setUserSelectedWeek] = useState<boolean>(false); // NEW: Track if user manually selected week
+  const [userSelectedWeek, setUserSelectedWeek] = useState<boolean>(false);
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [debugActive, setDebugActive] = useState(false); // NEW: Control debug logging
 
   const addDebugInfo = (message: string) => {
+    if (!debugActive) return; // NEW: Only log if debug is active
     console.log(`[DEBUG] ${message}`);
     setDebugInfo(prev => [...prev.slice(-19), `${new Date().toLocaleTimeString()}: ${message}`]);
   };
@@ -58,10 +61,13 @@ const MakePicksPage = () => {
       setUserEmail(data.session.user.email || null);
       const { data: profile, error } = await supabase
         .from("profiles")
-        .select("user_id")
+        .select("user_id, is_admin")
         .eq("email", data.session.user.email)
         .single();
-      if (!error) setUserId(profile.user_id);
+      if (!error) {
+        setUserId(profile.user_id);
+        setIsAdmin(profile.is_admin || false);
+      }
       setLoading(false);
     };
     checkAuth();
@@ -197,7 +203,7 @@ const MakePicksPage = () => {
     return () => clearInterval(interval);
   }, [now]);
 
-  // NEW: Handle week selection
+  // Handle week selection
   const handleWeekSelect = (week: number) => {
     setUserSelectedWeek(true); // Mark that user manually selected a week
     setActiveWeek(week);
@@ -205,14 +211,20 @@ const MakePicksPage = () => {
   };
 
   // Reset user selection when component mounts or when we want to go back to auto-selection
-  // You could add a "Current Week" button later if needed
   useEffect(() => {
     // Reset user selection when component first loads
     setUserSelectedWeek(false);
   }, []);
 
-  // Debug functions
+  // NEW: Toggle debug logging
+  const toggleDebugActive = () => {
+    setDebugActive(!debugActive);
+    addDebugInfo(`Debug logging ${!debugActive ? 'STARTED' : 'STOPPED'}`);
+  };
+
+  // Debug functions - Only allow if admin
   const checkSpecificGame = async () => {
+    if (!isAdmin) return;
     addDebugInfo("🔎 Checking LV @ DEN game in database...");
     const { data, error } = await supabase
       .from("games")
@@ -232,6 +244,7 @@ const MakePicksPage = () => {
   };
 
   const runScoreUpdate = async () => {
+    if (!isAdmin) return;
     addDebugInfo("🔄 Manually triggering score update...");
     try {
       const response = await fetch('/api/update-scores');
@@ -246,6 +259,7 @@ const MakePicksPage = () => {
   };
 
   const checkAllWeek10Games = async () => {
+    if (!isAdmin) return;
     addDebugInfo("🔍 Checking ALL Week 10 games...");
     const { data, error } = await supabase
       .from("games")
@@ -264,6 +278,7 @@ const MakePicksPage = () => {
   };
 
   const runSQLQueries = async () => {
+    if (!isAdmin) return;
     addDebugInfo("🔍 Running SQL diagnostics...");
     
     // Query 1: Check LV @ DEN specifically
@@ -462,7 +477,6 @@ const MakePicksPage = () => {
 
   const maxWeek = Math.max(...games.map((g) => g.week));
   const currentWeekNum = activeWeek ?? 1;
-  const isJasonUser = userEmail === 'jasonwhitesg@gmail.com';
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
@@ -485,8 +499,8 @@ const MakePicksPage = () => {
             View All Picks
           </Link>
           
-          {/* Debug Buttons - Only show if debug panel is visible or user is Jason */}
-          {showDebug && (
+          {/* Debug Buttons - Only show if debug panel is visible AND user is admin */}
+          {showDebug && isAdmin && (
             <>
               <button
                 onClick={() => fetchGames(true)}
@@ -494,14 +508,12 @@ const MakePicksPage = () => {
               >
                 Refresh Scores
               </button>
-              {isJasonUser && (
-                <button
-                  onClick={runScoreUpdate}
-                  className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition-colors"
-                >
-                  Update Scores API
-                </button>
-              )}
+              <button
+                onClick={runScoreUpdate}
+                className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition-colors"
+              >
+                Update Scores API
+              </button>
               <button
                 onClick={checkSpecificGame}
                 className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 transition-colors"
@@ -520,16 +532,29 @@ const MakePicksPage = () => {
               >
                 Run SQL Diagnostics
               </button>
+              {/* NEW: Start/Stop Debug Logging Button */}
+              <button
+                onClick={toggleDebugActive}
+                className={`px-4 py-2 rounded transition-colors ${
+                  debugActive 
+                    ? 'bg-red-500 text-white hover:bg-red-600' 
+                    : 'bg-green-500 text-white hover:bg-green-600'
+                }`}
+              >
+                {debugActive ? 'Stop Debug Logging' : 'Start Debug Logging'}
+              </button>
             </>
           )}
           
-          {/* Show debug toggle button */}
-          <button
-            onClick={() => setShowDebug(!showDebug)}
-            className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700 transition-colors"
-          >
-            {showDebug ? 'Hide Debug' : 'Show Debug'}
-          </button>
+          {/* Show debug toggle button - Only show for admin users */}
+          {isAdmin && (
+            <button
+              onClick={() => setShowDebug(!showDebug)}
+              className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700 transition-colors"
+            >
+              {showDebug ? 'Hide Debug' : 'Show Debug'}
+            </button>
+          )}
           
           {userEmail && <span className="text-gray-700">{userEmail}</span>}
           <button
@@ -541,21 +566,32 @@ const MakePicksPage = () => {
         </div>
       </div>
 
-      {/* Debug Info Panel - Only show when debug is enabled */}
-      {showDebug && (
+      {/* Debug Info Panel - Only show when debug is enabled AND user is admin */}
+      {showDebug && isAdmin && (
         <div className="mb-6 p-4 bg-gray-100 border border-gray-300 rounded-lg">
           <div className="flex justify-between items-center mb-2">
             <h3 className="font-bold text-lg">Debug Info (Make Picks)</h3>
-            <button
-              onClick={() => setDebugInfo([])}
-              className="text-sm bg-gray-500 text-white px-2 py-1 rounded"
-            >
-              Clear Debug
-            </button>
+            <div className="flex gap-2">
+              <span className={`px-2 py-1 rounded text-xs font-semibold ${
+                debugActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+              }`}>
+                {debugActive ? '🔴 LOGGING ACTIVE' : '⚫ LOGGING INACTIVE'}
+              </span>
+              <button
+                onClick={() => setDebugInfo([])}
+                className="text-sm bg-gray-500 text-white px-2 py-1 rounded"
+              >
+                Clear Debug
+              </button>
+            </div>
           </div>
           <div className="text-sm font-mono max-h-64 overflow-y-auto bg-black text-green-400 p-3 rounded">
             {debugInfo.length === 0 ? (
-              <div className="text-gray-500">No debug info yet. Use the buttons above to test.</div>
+              <div className="text-gray-500">
+                {debugActive 
+                  ? 'No debug info yet. Actions will be logged here.' 
+                  : 'Debug logging is inactive. Click "Start Debug Logging" to begin.'}
+              </div>
             ) : (
               debugInfo.map((info, index) => (
                 <div key={index} className="border-b border-gray-700 py-1">
@@ -581,7 +617,7 @@ const MakePicksPage = () => {
             return (
               <button
                 key={week}
-                onClick={() => handleWeekSelect(week)} // CHANGED: Use new handler
+                onClick={() => handleWeekSelect(week)}
                 className={`px-4 py-2 rounded-md text-sm font-semibold flex items-center gap-1 transition-all ${color}`}
               >
                 Week {week}
@@ -683,10 +719,10 @@ const MakePicksPage = () => {
                     )}
                     {isMondayNight && (
                       <div className="text-sm font-semibold text-purple-600 mt-1">
-                        Actual Total Points: {actualTotal}
+                        Actual Total Points: <span className="text-lg font-bold text-purple-800">{actualTotal}</span>
                         {userHasSetTotal && (
-                          <span className="text-gray-600 ml-2">
-                            (Your pick: {mondayNightTotals[g.id]})
+                          <span className="text-gray-800 ml-2 font-medium">
+                            (Your pick: <span className="text-lg font-bold text-purple-800">{mondayNightTotals[g.id]}</span>)
                           </span>
                         )}
                       </div>
@@ -709,15 +745,20 @@ const MakePicksPage = () => {
                           max="100"
                           value={mondayNightTotals[g.id] ?? ''}
                           onChange={(e) => handleMondayNightTotalChange(g.id, e.target.value ? parseInt(e.target.value) : null)}
-                          className="w-24 px-3 py-2 border border-gray-300 rounded text-center font-semibold"
-                          placeholder="Enter total"
+                          className="w-24 px-3 py-2 border-2 border-purple-300 rounded text-center font-bold text-lg text-purple-800 bg-white"
+                          placeholder="0"
                           disabled={savingScore === g.id}
+                          style={{
+                            fontSize: '1.125rem',
+                            fontWeight: 'bold',
+                            color: '#1e1b4b'
+                          }}
                         />
                       </div>
                     </div>
                     {userHasSetTotal && (
-                      <div className="text-xs text-purple-600 text-center mt-2">
-                        Total points set: {mondayNightTotals[g.id]} (will lock when game starts)
+                      <div className="text-sm font-semibold text-purple-800 text-center mt-2">
+                        Total points set: <span className="text-lg font-bold">{mondayNightTotals[g.id]}</span> (will lock when game starts)
                       </div>
                     )}
                     {savingScore === g.id && (
@@ -732,7 +773,7 @@ const MakePicksPage = () => {
                 {isMondayNight && !isFinal && locked && userHasSetTotal && (
                   <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mt-2 w-full">
                     <div className="text-sm font-semibold text-yellow-800 text-center">
-                      Total Points Locked: {mondayNightTotals[g.id]}
+                      Total Points Locked: <span className="text-lg font-bold text-yellow-900">{mondayNightTotals[g.id]}</span>
                     </div>
                     <div className="text-xs text-yellow-600 text-center mt-1">
                       Waiting for final score...
@@ -760,10 +801,10 @@ const MakePicksPage = () => {
                       Your pick: {pick} - {pickCorrect ? '✓ Correct' : '✗ Incorrect'}
                     </div>
                     {isMondayNight && userHasSetTotal && (
-                      <div className={`text-sm mt-1 ${
+                      <div className={`text-sm mt-1 font-semibold ${
                         mondayNightTotals[g.id] === actualTotal ? 'text-green-700' : 'text-red-700'
                       }`}>
-                        Total Points: {mondayNightTotals[g.id]} vs Actual: {actualTotal} - 
+                        Total Points: <span className="text-lg font-bold">{mondayNightTotals[g.id]}</span> vs Actual: <span className="text-lg font-bold">{actualTotal}</span> - 
                         {mondayNightTotals[g.id] === actualTotal ? ' ✓ Correct' : ' ✗ Incorrect'}
                       </div>
                     )}
