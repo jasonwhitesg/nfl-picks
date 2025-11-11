@@ -836,15 +836,15 @@ const AllPicksPage = () => {
                       {/* Player name with hover/touch functionality - Sticky */}
                       <td 
                         className={`border border-gray-300 p-3 font-semibold relative sticky left-0 z-10 ${
-                          isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-gray-50'
-                        }`}
+                          isWinner ? getWinnerBackgroundColor() : 'bg-gray-50'
+                        } text-gray-900`}
                         onMouseEnter={() => setHoveredUser(user.user_id)}
                         onMouseLeave={() => setHoveredUser(null)}
                         onTouchStart={() => setHoveredUser(user.user_id)}
                       >
                         <div className="cursor-default">
                           {/* UPDATED: Show username instead of email */}
-                          {user.username}
+                          <span className="text-gray-900 font-bold">{user.username}</span>
                           {isPaidWinner && <div className="text-xs text-green-700 mt-1">🏆 Most Correct (Paid Winner)</div>}
                           {isUnpaidWinner && <div className="text-xs text-orange-700 mt-1">🥈 Most Correct (Would Have Won)</div>}
                         </div>
