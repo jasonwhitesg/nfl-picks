@@ -81,6 +81,7 @@ const AllPicksPage = () => {
   const [updatingPaidStatus, setUpdatingPaidStatus] = useState<string | null>(null);
   const [hoveredUser, setHoveredUser] = useState<string | null>(null);
   const [hoveredGame, setHoveredGame] = useState<string | null>(null);
+  const [hoveredLockIndicator, setHoveredLockIndicator] = useState<string | null>(null);
   const [userSelectedWeek, setUserSelectedWeek] = useState<boolean>(false);
   const [headerExpanded, setHeaderExpanded] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -94,6 +95,23 @@ const AllPicksPage = () => {
       new Date().toLocaleString("en-US", { timeZone: "America/Denver" })
     );
   }
+
+  // Countdown timer for game start
+  const getCountdown = (startTime: string) => {
+    const gameTime = new Date(startTime);
+    const nowMST = getNowMST();
+    const diff = gameTime.getTime() - nowMST.getTime();
+    
+    if (diff <= 0) return "Game started";
+    
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    
+    if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
+  };
 
   // Function to store weekly winners in the database
   const storeWeeklyWinners = async (week: number) => {
@@ -235,23 +253,6 @@ const AllPicksPage = () => {
 
     checkAndStoreWinners();
   }, [games, activeWeek, bestPerformers, profiles, userStats]);
-
-  // Countdown timer for game start
-  const getCountdown = (startTime: string) => {
-    const gameTime = new Date(startTime);
-    const nowMST = getNowMST();
-    const diff = gameTime.getTime() - nowMST.getTime();
-    
-    if (diff <= 0) return "Game started";
-    
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-    
-    if (days > 0) return `${days}d ${hours}h ${minutes}m`;
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    return `${minutes}m`;
-  };
 
   // Fetch paid status from weekly_payments table
   const fetchPaidStatus = async () => {
@@ -1043,7 +1044,6 @@ const AllPicksPage = () => {
                       >
                         <div className="cursor-help">
                           {formatGameLabel(game)}
-                          {/* REMOVED: Start time display from column header */}
                         </div>
                         
                         {/* Hover/Touch Tooltip for Game Info */}
@@ -1103,15 +1103,45 @@ const AllPicksPage = () => {
                     {activeWeekGames.map((game) => {
                       const locked = isLocked(game.startTime);
                       return (
-                        <td key={game.id} className="border border-gray-300 p-3 text-center">
-                          <span
-                            className={`inline-block w-4 h-4 rounded-full ${
-                              locked ? "bg-red-600" : "bg-green-500"
-                            }`}
-                            title={locked ? "Game started / Pick locked" : "Pick available"}
-                          ></span>
-                          {locked && (
-                            <div className="text-xs text-gray-600 mt-1">LOCKED</div>
+                        <td 
+                          key={game.id} 
+                          className="border border-gray-300 p-3 text-center relative"
+                          onMouseEnter={() => setHoveredLockIndicator(game.id)}
+                          onMouseLeave={() => setHoveredLockIndicator(null)}
+                          onTouchStart={() => setHoveredLockIndicator(game.id)}
+                        >
+                          <div className="flex flex-col items-center justify-center">
+                            <span
+                              className={`inline-block w-4 h-4 rounded-full ${
+                                locked ? "bg-red-600" : "bg-green-500"
+                              }`}
+                              title={locked ? "Game started / Pick locked" : "Pick available"}
+                            ></span>
+                            {locked && (
+                              <div className="text-xs text-gray-600 mt-1">LOCKED</div>
+                            )}
+                          </div>
+                          
+                          {/* Hover/Touch Tooltip for Lock Indicator */}
+                          {(hoveredLockIndicator === game.id) && (
+                            <div className="absolute left-1/2 transform -translate-x-1/2 bottom-full mb-2 z-30 bg-gray-800 text-white text-sm px-3 py-2 rounded-lg shadow-lg whitespace-nowrap">
+                              <div className="font-semibold">
+                                {formatGameLabel(game)}
+                              </div>
+                              <div className="text-xs text-gray-300 mt-1">
+                                {formatTime(game.startTime)} MST
+                              </div>
+                              {locked ? (
+                                <div className="text-xs text-red-300 mt-1 font-bold">
+                                  🔒 Game started - Picks locked
+                                </div>
+                              ) : (
+                                <div className="text-xs text-green-300 mt-1 font-bold">
+                                  Starts in: {getCountdown(game.startTime)}
+                                </div>
+                              )}
+                              <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-800"></div>
+                            </div>
                           )}
                         </td>
                       );
@@ -1337,11 +1367,11 @@ const AllPicksPage = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
             <div className="flex items-center gap-3">
               <span className="inline-block w-4 h-4 rounded-full bg-green-500 border border-green-600"></span>
-              <span className="text-gray-800 font-medium">Pick available (game hasn't started)</span>
+              <span className="text-gray-800 font-medium">Pick available (game hasn't started) - Hover for countdown</span>
             </div>
             <div className="flex items-center gap-3">
               <span className="inline-block w-4 h-4 rounded-full bg-red-600 border border-red-700"></span>
-              <span className="text-gray-800 font-medium">Pick locked (game started)</span>
+              <span className="text-gray-800 font-medium">Pick locked (game started) - Hover for details</span>
             </div>
             <div className="flex items-center gap-3">
               <span className="text-green-600 text-xl">✓</span>
@@ -1388,6 +1418,10 @@ const AllPicksPage = () => {
             <div className="flex items-center gap-3">
               <span className="text-blue-600 font-medium">Hover/Click Name</span>
               <span className="text-gray-800 font-medium">See user's first and last name</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-blue-600 font-medium">Hover Lock Indicator</span>
+              <span className="text-gray-800 font-medium">See countdown or lock status</span>
             </div>
           </div>
         </div>
