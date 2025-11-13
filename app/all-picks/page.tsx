@@ -46,6 +46,16 @@ type UserStats = {
   hasMadePicks: boolean;
 };
 
+type WinnerData = {
+  season: number;
+  week: number;
+  player_name: string;
+  correct_picks: number;
+  tiebreaker: number | null;
+  is_paid_winner: boolean;
+  is_tied: boolean;
+};
+
 const AllPicksPage = () => {
   const router = useRouter();
   const [games, setGames] = useState<Game[]>([]);
@@ -74,6 +84,7 @@ const AllPicksPage = () => {
   const [userSelectedWeek, setUserSelectedWeek] = useState<boolean>(false);
   const [headerExpanded, setHeaderExpanded] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [storingWinners, setStoringWinners] = useState(false);
 
   const SEASON_YEAR = 2025;
 
@@ -83,6 +94,147 @@ const AllPicksPage = () => {
       new Date().toLocaleString("en-US", { timeZone: "America/Denver" })
     );
   }
+
+  // Function to store weekly winners in the database
+  const storeWeeklyWinners = async (week: number) => {
+    try {
+      setStoringWinners(true);
+      console.log(`🏆 Storing winners for week ${week}...`);
+      
+      const paidWinners = bestPerformers.paidMostCorrect;
+      const unpaidWinners = bestPerformers.unpaidMostCorrect;
+      
+      if (paidWinners.length === 0 && unpaidWinners.length === 0) {
+        console.log('No winners found for this week');
+        return { success: false, message: 'No winners found' };
+      }
+
+      // Check if winners already exist
+      const { data: existingWinners, error: checkError } = await supabase
+        .from('weekly_winners')
+        .select('*')
+        .eq('season', SEASON_YEAR)
+        .eq('week', week);
+
+      if (checkError) {
+        console.error('Error checking existing winners:', checkError);
+        return { success: false, error: checkError };
+      }
+
+      if (existingWinners && existingWinners.length > 0) {
+        console.log('Winners already exist for this week:', existingWinners);
+        return { 
+          success: false, 
+          message: 'Winners already stored', 
+          existingWinners 
+        };
+      }
+
+      // Prepare winners data with explicit type
+      const winnersData: WinnerData[] = [];
+      
+      // Add paid winners
+      paidWinners.forEach(userId => {
+        const userProfile = profiles.find(p => p.user_id === userId);
+        const stats = userStats[userId];
+        
+        if (userProfile && stats) {
+          winnersData.push({
+            season: SEASON_YEAR,
+            week: week,
+            player_name: userProfile.username,
+            correct_picks: stats.correctPicks,
+            tiebreaker: stats.mondayNightDifference,
+            is_paid_winner: true,
+            is_tied: paidWinners.length > 1
+          });
+        }
+      });
+      
+      // Add unpaid winners
+      unpaidWinners.forEach(userId => {
+        const userProfile = profiles.find(p => p.user_id === userId);
+        const stats = userStats[userId];
+        
+        if (userProfile && stats) {
+          winnersData.push({
+            season: SEASON_YEAR,
+            week: week,
+            player_name: userProfile.username,
+            correct_picks: stats.correctPicks,
+            tiebreaker: stats.mondayNightDifference,
+            is_paid_winner: false,
+            is_tied: unpaidWinners.length > 1
+          });
+        }
+      });
+
+      console.log(`📊 Storing ${winnersData.length} winners:`, winnersData);
+
+      // Store in database
+      const { data, error } = await supabase
+        .from('weekly_winners')
+        .insert(winnersData)
+        .select();
+
+      if (error) {
+        console.error('Error storing weekly winners:', error);
+        return { success: false, error };
+      }
+
+      console.log(`✅ Successfully stored ${winnersData.length} winners for week ${week}`);
+      return { success: true, data };
+    } catch (err) {
+      console.error('Error in storeWeeklyWinners:', err);
+      return { success: false, error: err };
+    } finally {
+      setStoringWinners(false);
+    }
+  };
+
+  // Check if Monday Night Game is final and store winners
+  useEffect(() => {
+    const checkAndStoreWinners = async () => {
+      if (!activeWeek || games.length === 0 || picks.length === 0 || profiles.length === 0) return;
+
+      // Find Monday Night Football game for active week
+      const mondayNightGame = games.find(game => 
+        game.week === activeWeek && game.is_monday_night
+      );
+
+      if (!mondayNightGame) {
+        console.log('No Monday Night Football game found for this week');
+        return;
+      }
+
+      // Check if MNF game is final
+      if (mondayNightGame.status === "Final") {
+        console.log(`🎯 MNF game is FINAL for week ${activeWeek}, checking if winners need to be stored...`);
+        
+        // Check if winners already exist in database for this week
+        const { data: existingWinners, error } = await supabase
+          .from('weekly_winners')
+          .select('*')
+          .eq('season', SEASON_YEAR)
+          .eq('week', activeWeek);
+
+        if (error) {
+          console.error('Error checking existing winners:', error);
+          return;
+        }
+
+        // Only store winners if they haven't been stored yet
+        if (!existingWinners || existingWinners.length === 0) {
+          console.log(`🏆 No existing winners found for week ${activeWeek}, storing now...`);
+          await storeWeeklyWinners(activeWeek);
+        } else {
+          console.log(`✅ Winners already stored for week ${activeWeek}:`, existingWinners);
+        }
+      }
+    };
+
+    checkAndStoreWinners();
+  }, [games, activeWeek, bestPerformers, profiles, userStats]);
 
   // Countdown timer for game start
   const getCountdown = (startTime: string) => {
@@ -744,6 +896,58 @@ const AllPicksPage = () => {
             <p className="text-sm text-blue-600 mt-1">
               Showing {sortedProfiles.length} players who made picks for this week
             </p>
+          </div>
+        )}
+
+        {/* Admin Winner Controls */}
+        {isAdmin && activeWeek && (
+          <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+            <h3 className="font-semibold text-yellow-800 mb-2">Admin: Weekly Winners</h3>
+            <div className="flex flex-wrap gap-4 items-center">
+              <button
+                onClick={async () => {
+                  if (confirm(`Store winners for Week ${activeWeek}? This will save paid and unpaid winners to the database.`)) {
+                    const result = await storeWeeklyWinners(activeWeek);
+                    if (result.success) {
+                      alert(`✅ Winners stored successfully for Week ${activeWeek}!`);
+                    } else {
+                      alert(`❌ Failed to store winners: ${result.message}`);
+                    }
+                  }
+                }}
+                disabled={storingWinners}
+                className="bg-green-500 text-white px-4 py-2 rounded font-semibold hover:bg-green-600 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {storingWinners ? '💾 Storing...' : '💾 Store Winners for Week ' + activeWeek}
+              </button>
+              
+              <button
+                onClick={async () => {
+                  // Check existing winners
+                  const { data: existingWinners } = await supabase
+                    .from('weekly_winners')
+                    .select('*')
+                    .eq('season', SEASON_YEAR)
+                    .eq('week', activeWeek);
+                  
+                  if (existingWinners && existingWinners.length > 0) {
+                    alert(`Winners for Week ${activeWeek}:\n${existingWinners.map(w => 
+                      `${w.player_name} (${w.is_paid_winner ? 'Paid' : 'Unpaid'}) - ${w.correct_picks} correct${w.is_tied ? ' - Tied' : ''}`
+                    ).join('\n')}`);
+                  } else {
+                    alert(`No winners stored yet for Week ${activeWeek}`);
+                  }
+                }}
+                className="bg-blue-500 text-white px-4 py-2 rounded font-semibold hover:bg-blue-600 transition-colors"
+              >
+                👀 View Stored Winners
+              </button>
+              
+              <div className="text-sm text-yellow-700">
+                Paid Winners: {bestPerformers.paidMostCorrect.length} | 
+                Unpaid Winners: {bestPerformers.unpaidMostCorrect.length}
+              </div>
+            </div>
           </div>
         )}
 
