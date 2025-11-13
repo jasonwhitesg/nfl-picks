@@ -195,17 +195,17 @@ export default function Home() {
         {/* Main Header Bar */}
         <div className="flex items-center justify-between p-4">
           <div className="flex items-center gap-4">
-            {/* Expand Button */}
-            <button
-              onClick={() => setHeaderExpanded(!headerExpanded)}
-              className="p-2 rounded-lg hover:bg-gray-100 transition-colors flex items-center gap-2"
-              title={headerExpanded ? "Collapse menu" : "Expand menu"}
-            >
-              <span className="text-xl">{headerExpanded ? "✕" : "☰"}</span>
-              <span className="font-semibold text-gray-800 hidden sm:block">
-                {headerExpanded ? "Close Menu" : "Menu"}
-              </span>
-            </button>
+          {/* Expand Button */}
+          <button
+            onClick={() => setHeaderExpanded(!headerExpanded)}
+            className="p-2 rounded-lg hover:bg-gray-200 transition-colors flex items-center gap-2 bg-gray-100 border border-gray-300"
+            title={headerExpanded ? "Collapse menu" : "Expand menu"}
+          >
+            <span className="text-xl text-gray-800">{headerExpanded ? "✕" : "☰"}</span>
+            <span className="font-semibold text-gray-800 hidden sm:block">
+              {headerExpanded ? "Close Menu" : "Menu"}
+            </span>
+          </button>
 
             {/* Logo/Title */}
             <h1 className="text-2xl font-bold text-gray-800">NFL Picks</h1>
