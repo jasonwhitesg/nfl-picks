@@ -36,10 +36,10 @@ export default function PickPercentagesPage() {
             {/* Expand Button */}
             <button
               onClick={() => setHeaderExpanded(!headerExpanded)}
-              className="p-2 rounded-lg hover:bg-gray-100 transition-colors flex items-center gap-2"
+              className="p-2 rounded-lg hover:bg-gray-200 transition-colors flex items-center gap-2 bg-gray-100 border border-gray-300"
               title={headerExpanded ? "Collapse menu" : "Expand menu"}
             >
-              <span className="text-xl">{headerExpanded ? "✕" : "☰"}</span>
+              <span className="text-xl text-gray-800">{headerExpanded ? "✕" : "☰"}</span>
               <span className="font-semibold text-gray-800 hidden sm:block">
                 {headerExpanded ? "Close Menu" : "Menu"}
               </span>
