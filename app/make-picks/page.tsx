@@ -39,6 +39,7 @@ const MakePicksPage = () => {
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [debugActive, setDebugActive] = useState(false);
   const [headerExpanded, setHeaderExpanded] = useState(false);
+  const [updatingScores, setUpdatingScores] = useState(false);
 
   const addDebugInfo = (message: string) => {
     if (!debugActive) return;
@@ -137,7 +138,9 @@ const MakePicksPage = () => {
     fetchPicksAndTotals();
   }, [userId]);
 
-  const fetchGames = async () => {
+  const fetchGames = async (forceRefresh = false) => {
+    addDebugInfo(`Fetching games from database... ${forceRefresh ? '(FORCED)' : ''}`);
+    
     const { data, error } = await supabase
       .from("games")
       .select("*")
@@ -154,6 +157,8 @@ const MakePicksPage = () => {
       g.team_a.trim() !== '' && g.team_b.trim() !== '' &&
       g.team_a.toLowerCase() !== 'bye' && g.team_b.toLowerCase() !== 'bye'
     );
+
+    addDebugInfo(`📊 Found ${filteredData.length} games after filtering`);
 
     const mapped: Game[] = filteredData.map((g: any) => {
       let status = g.status;
@@ -210,20 +215,27 @@ const MakePicksPage = () => {
         
         const allGamesFinal = weekGames.every(game => game.status === "Final");
         
+        addDebugInfo(`🔍 Week ${week}: games=${weekGames.length}, hasActive=${hasActiveGames}, allFinal=${allGamesFinal}`);
+        
         if (hasActiveGames) {
           newActiveWeek = week;
+          addDebugInfo(`🎯 Setting active week to ${week} - has active games`);
           break;
         }
         
         if (allGamesFinal && !newActiveWeek) {
           newActiveWeek = week;
+          addDebugInfo(`📌 Week ${week} as fallback - all games final`);
         }
       }
       
       if (newActiveWeek) {
         setActiveWeek(newActiveWeek);
+        addDebugInfo(`📅 Final active week: ${newActiveWeek}`);
       } else {
-        setActiveWeek(weekNumbers[weekNumbers.length - 1] || 1);
+        newActiveWeek = weekNumbers[weekNumbers.length - 1] || 1;
+        setActiveWeek(newActiveWeek);
+        addDebugInfo(`🎯 Final fallback: using week ${newActiveWeek}`);
       }
     }
   };
@@ -237,6 +249,7 @@ const MakePicksPage = () => {
   const handleWeekSelect = (week: number) => {
     setUserSelectedWeek(true);
     setActiveWeek(week);
+    addDebugInfo(`🎯 User manually selected week: ${week}`);
   };
 
   useEffect(() => {
@@ -245,6 +258,151 @@ const MakePicksPage = () => {
 
   const toggleDebugActive = () => {
     setDebugActive(!debugActive);
+    addDebugInfo(`Debug logging ${!debugActive ? 'STARTED' : 'STOPPED'}`);
+  };
+
+  // Admin functions for updating scores
+  const runScoreUpdate = async () => {
+    if (!isAdmin) return;
+    
+    setUpdatingScores(true);
+    addDebugInfo("🔄 Manually triggering score update...");
+    
+    try {
+      const response = await fetch('/api/update-scores');
+      const result = await response.json();
+      
+      addDebugInfo(`✅ API Response: ${JSON.stringify(result)}`);
+      
+      if (response.ok) {
+        // Refresh games after update
+        setTimeout(() => {
+          fetchGames(true);
+          setUpdatingScores(false);
+        }, 2000);
+      } else {
+        addDebugInfo(`❌ API Error: ${result.error}`);
+        setUpdatingScores(false);
+      }
+    } catch (error) {
+      addDebugInfo(`❌ API Error: ${error}`);
+      setUpdatingScores(false);
+    }
+  };
+
+  const checkSpecificGame = async () => {
+    if (!isAdmin) return;
+    addDebugInfo("🔎 Checking LV @ DEN game in database...");
+    const { data, error } = await supabase
+      .from("games")
+      .select("*")
+      .eq("team_a", "LV")
+      .eq("team_b", "DEN")
+      .eq("week", 10);
+
+    if (error) {
+      addDebugInfo(`❌ Error checking LV@DEN: ${error.message}`);
+    } else if (data && data.length > 0) {
+      const game = data[0];
+      addDebugInfo(`✅ LV@DEN FOUND: home_score=${game.home_score}, away_score=${game.away_score}, status=${game.status}, winner=${game.winner}`);
+    } else {
+      addDebugInfo("❌ LV@DEN game not found in database!");
+    }
+  };
+
+  const checkAllWeek10Games = async () => {
+    if (!isAdmin) return;
+    addDebugInfo("🔍 Checking ALL Week 10 games...");
+    const { data, error } = await supabase
+      .from("games")
+      .select("*")
+      .eq("week", 10)
+      .order("start_time");
+
+    if (error) {
+      addDebugInfo(`❌ Error checking Week 10: ${error.message}`);
+    } else if (data) {
+      addDebugInfo(`📋 Week 10 games in DB: ${data.length}`);
+      data.forEach(game => {
+        addDebugInfo(`   ${game.team_a} @ ${game.team_b}: ${game.home_score}-${game.away_score} - ${game.status}`);
+      });
+    }
+  };
+
+  const runSQLQueries = async () => {
+    if (!isAdmin) return;
+    addDebugInfo("🔍 Running SQL diagnostics...");
+    
+    // Query 1: Check LV @ DEN specifically
+    const { data: lvDen, error: error1 } = await supabase
+      .from("games")
+      .select("*")
+      .eq("team_a", "LV")
+      .eq("team_b", "DEN")
+      .eq("week", 10);
+
+    if (error1) {
+      addDebugInfo(`❌ LV@DEN query error: ${error1.message}`);
+    } else {
+      addDebugInfo(`✅ LV@DEN found: ${lvDen?.length || 0} games`);
+      lvDen?.forEach(game => {
+        addDebugInfo(`   ID: ${game.id}, Scores: ${game.home_score}-${game.away_score}, Status: ${game.status}`);
+      });
+    }
+
+    // Query 2: Check all Week 10 games
+    const { data: week10, error: error2 } = await supabase
+      .from("games")
+      .select("id, team_a, team_b, home_score, away_score, status")
+      .eq("week", 10)
+      .order("start_time");
+
+    if (error2) {
+      addDebugInfo(`❌ Week 10 query error: ${error2.message}`);
+    } else {
+      addDebugInfo(`📋 Week 10 games: ${week10?.length || 0} total`);
+      week10?.forEach(game => {
+        addDebugInfo(`   ${game.team_a} @ ${game.team_b}: ${game.home_score}-${game.away_score} - ${game.status}`);
+      });
+    }
+  };
+
+  const debugUserPicks = async () => {
+    if (!isAdmin) return;
+    
+    addDebugInfo("🔍 DEBUG: Checking gstark02@yahoo.com picks...");
+    
+    // First find the user_id for gstark02@yahoo.com
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("user_id")
+      .eq("email", "gstark02@yahoo.com")
+      .single();
+
+    if (!profile) {
+      addDebugInfo("❌ User gstark02@yahoo.com not found in profiles");
+      return;
+    }
+
+    addDebugInfo(`📋 User ID for gstark02@yahoo.com: ${profile.user_id}`);
+
+    // Check all picks for this user
+    const { data: picks } = await supabase
+      .from("game_picks")
+      .select("game_id, selected_team, total_points")
+      .eq("user_id", profile.user_id);
+
+    addDebugInfo(`📊 gstark02@yahoo.com has ${picks?.length || 0} picks in database`);
+    
+    if (picks) {
+      picks.forEach(pick => {
+        addDebugInfo(`   Game ${pick.game_id}: ${pick.selected_team} (total: ${pick.total_points})`);
+      });
+    }
+
+    // Check if current user matches
+    addDebugInfo(`🔍 Current userId state: ${userId}`);
+    addDebugInfo(`🔍 Current userEmail state: ${userEmail}`);
   };
 
   const formatTime = (iso: string) => {
@@ -410,13 +568,27 @@ const MakePicksPage = () => {
           </div>
           
           <div className="flex items-center gap-4">
+            {/* Debug Buttons - Only show if debug panel is visible AND user is admin */}
             {showDebug && isAdmin && (
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => fetchGames()}
+                  onClick={() => fetchGames(true)}
                   className="bg-orange-500 text-white px-3 py-1 rounded hover:bg-orange-600 transition-colors text-xs"
                 >
                   Refresh Scores
+                </button>
+                <button
+                  onClick={runScoreUpdate}
+                  disabled={updatingScores}
+                  className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 transition-colors text-xs disabled:bg-blue-300 disabled:cursor-not-allowed"
+                >
+                  {updatingScores ? 'Updating...' : 'Update Scores API'}
+                </button>
+                <button
+                  onClick={debugUserPicks}
+                  className="bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600 transition-colors text-xs"
+                >
+                  Debug User Picks
                 </button>
                 <button
                   onClick={toggleDebugActive}
