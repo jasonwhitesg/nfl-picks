@@ -113,21 +113,24 @@ const AllPicksPage = () => {
     return `${minutes}m`;
   };
 
-  // Function to store weekly winners in the database
+  // FIXED: Store weekly winners with better logging
   const storeWeeklyWinners = async (week: number) => {
     try {
       setStoringWinners(true);
-      console.log(`🏆 Storing winners for week ${week}...`);
+      console.log(`🏆 Storing winners for Week ${week}...`);
       
       const paidWinners = bestPerformers.paidMostCorrect;
       const unpaidWinners = bestPerformers.unpaidMostCorrect;
       
+      console.log(`💰 Paid winners for Week ${week}:`, paidWinners);
+      console.log(`🚫 Unpaid winners for Week ${week}:`, unpaidWinners);
+      
       if (paidWinners.length === 0 && unpaidWinners.length === 0) {
-        console.log('No winners found for this week');
+        console.log('❌ No winners found for this week');
         return { success: false, message: 'No winners found' };
       }
 
-      // Check if winners already exist
+      // Check if winners already exist FOR THIS SPECIFIC WEEK
       const { data: existingWinners, error: checkError } = await supabase
         .from('weekly_winners')
         .select('*')
@@ -140,7 +143,7 @@ const AllPicksPage = () => {
       }
 
       if (existingWinners && existingWinners.length > 0) {
-        console.log('Winners already exist for this week:', existingWinners);
+        console.log('✅ Winners already exist for Week', week, ':', existingWinners.map(w => w.player_name));
         return { 
           success: false, 
           message: 'Winners already stored', 
@@ -148,7 +151,7 @@ const AllPicksPage = () => {
         };
       }
 
-      // Prepare winners data with explicit type
+      // Prepare winners data
       const winnersData: WinnerData[] = [];
       
       // Add paid winners
@@ -166,6 +169,7 @@ const AllPicksPage = () => {
             is_paid_winner: true,
             is_tied: paidWinners.length > 1
           });
+          console.log(`💰 Adding paid winner: ${userProfile.username} with ${stats.correctPicks} correct picks`);
         }
       });
       
@@ -184,10 +188,11 @@ const AllPicksPage = () => {
             is_paid_winner: false,
             is_tied: unpaidWinners.length > 1
           });
+          console.log(`🚫 Adding unpaid winner: ${userProfile.username} with ${stats.correctPicks} correct picks`);
         }
       });
 
-      console.log(`📊 Storing ${winnersData.length} winners:`, winnersData);
+      console.log(`📊 Storing ${winnersData.length} winners for Week ${week}:`, winnersData);
 
       // Store in database
       const { data, error } = await supabase
@@ -196,40 +201,44 @@ const AllPicksPage = () => {
         .select();
 
       if (error) {
-        console.error('Error storing weekly winners:', error);
+        console.error('❌ Error storing weekly winners:', error);
         return { success: false, error };
       }
 
-      console.log(`✅ Successfully stored ${winnersData.length} winners for week ${week}`);
+      console.log(`✅ Successfully stored ${winnersData.length} winners for Week ${week}`);
       return { success: true, data };
     } catch (err) {
-      console.error('Error in storeWeeklyWinners:', err);
+      console.error('❌ Error in storeWeeklyWinners:', err);
       return { success: false, error: err };
     } finally {
       setStoringWinners(false);
     }
   };
 
-  // Check if Monday Night Game is final and store winners
+  // FIXED: Check and store winners - only for the active week
   useEffect(() => {
     const checkAndStoreWinners = async () => {
       if (!activeWeek || games.length === 0 || picks.length === 0 || profiles.length === 0) return;
 
-      // Find Monday Night Football game for active week
+      console.log(`🔍 Checking winners for Week ${activeWeek}...`);
+
+      // Find Monday Night Football game for ACTIVE WEEK only
       const mondayNightGame = games.find(game => 
         game.week === activeWeek && game.is_monday_night
       );
 
       if (!mondayNightGame) {
-        console.log('No Monday Night Football game found for this week');
+        console.log(`❌ No Monday Night Football game found for Week ${activeWeek}`);
         return;
       }
 
-      // Check if MNF game is final
+      console.log(`📊 MNF game for Week ${activeWeek}: ${mondayNightGame.awayTeam} @ ${mondayNightGame.homeTeam}, Status: ${mondayNightGame.status}`);
+
+      // Check if MNF game is final FOR THE ACTIVE WEEK
       if (mondayNightGame.status === "Final") {
-        console.log(`🎯 MNF game is FINAL for week ${activeWeek}, checking if winners need to be stored...`);
+        console.log(`🎯 MNF game is FINAL for Week ${activeWeek}, checking if winners need to be stored...`);
         
-        // Check if winners already exist in database for this week
+        // Check if winners already exist in database for THIS WEEK
         const { data: existingWinners, error } = await supabase
           .from('weekly_winners')
           .select('*')
@@ -241,18 +250,45 @@ const AllPicksPage = () => {
           return;
         }
 
-        // Only store winners if they haven't been stored yet
+        // Only store winners if they haven't been stored yet FOR THIS WEEK
         if (!existingWinners || existingWinners.length === 0) {
-          console.log(`🏆 No existing winners found for week ${activeWeek}, storing now...`);
+          console.log(`🏆 No existing winners found for Week ${activeWeek}, storing now...`);
           await storeWeeklyWinners(activeWeek);
         } else {
-          console.log(`✅ Winners already stored for week ${activeWeek}:`, existingWinners);
+          console.log(`✅ Winners already stored for Week ${activeWeek}:`, existingWinners.map(w => `${w.player_name} (${w.is_paid_winner ? 'Paid' : 'Unpaid'})`));
         }
+      } else {
+        console.log(`⏳ MNF game for Week ${activeWeek} is not final yet: ${mondayNightGame.status}`);
       }
     };
 
     checkAndStoreWinners();
   }, [games, activeWeek, bestPerformers, profiles, userStats]);
+
+  // Add this function to debug week detection
+  const debugWeekDetection = async () => {
+    console.log("🔍 DEBUG WEEK DETECTION:");
+    console.log("Active Week:", activeWeek);
+    
+    // Check all MNF games and their status
+    const mnfGames = games.filter(game => game.is_monday_night);
+    console.log("All MNF Games:", mnfGames.map(g => `Week ${g.week}: ${g.awayTeam} @ ${g.homeTeam} - ${g.status}`));
+    
+    // Check current week's MNF game
+    if (activeWeek) {
+      const currentMNF = games.find(game => game.week === activeWeek && game.is_monday_night);
+      console.log(`Current Week ${activeWeek} MNF:`, currentMNF);
+    }
+    
+    // Check existing winners in database
+    const { data: allWinners } = await supabase
+      .from('weekly_winners')
+      .select('*')
+      .eq('season', SEASON_YEAR)
+      .order('week');
+    
+    console.log("Existing winners in DB:", allWinners);
+  };
 
   // Fetch paid status from weekly_payments table
   const fetchPaidStatus = async () => {
@@ -920,6 +956,13 @@ const AllPicksPage = () => {
                 className="bg-green-500 text-white px-4 py-2 rounded font-semibold hover:bg-green-600 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
               >
                 {storingWinners ? '💾 Storing...' : '💾 Store Winners for Week ' + activeWeek}
+              </button>
+              
+              <button
+                onClick={debugWeekDetection}
+                className="bg-gray-500 text-white px-4 py-2 rounded font-semibold hover:bg-gray-600 transition-colors"
+              >
+                🐛 Debug Week Detection
               </button>
               
               <button
