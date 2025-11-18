@@ -113,7 +113,7 @@ const AllPicksPage = () => {
     return `${minutes}m`;
   };
 
-  // FIXED: Store weekly winners with better logging
+  // FIXED: Store weekly winners with proper validation
   const storeWeeklyWinners = async (week: number) => {
     try {
       setStoringWinners(true);
@@ -125,12 +125,13 @@ const AllPicksPage = () => {
       console.log(`💰 Paid winners for Week ${week}:`, paidWinners);
       console.log(`🚫 Unpaid winners for Week ${week}:`, unpaidWinners);
       
+      // VALIDATION: Only store if there are actual winners
       if (paidWinners.length === 0 && unpaidWinners.length === 0) {
         console.log('❌ No winners found for this week');
         return { success: false, message: 'No winners found' };
       }
 
-      // Check if winners already exist FOR THIS SPECIFIC WEEK
+      // Check if winners already exist
       const { data: existingWinners, error: checkError } = await supabase
         .from('weekly_winners')
         .select('*')
@@ -143,7 +144,7 @@ const AllPicksPage = () => {
       }
 
       if (existingWinners && existingWinners.length > 0) {
-        console.log('✅ Winners already exist for Week', week, ':', existingWinners.map(w => w.player_name));
+        console.log('✅ Winners already stored for Week', week);
         return { 
           success: false, 
           message: 'Winners already stored', 
@@ -154,7 +155,7 @@ const AllPicksPage = () => {
       // Prepare winners data
       const winnersData: WinnerData[] = [];
       
-      // Add paid winners
+      // Store paid winners
       paidWinners.forEach(userId => {
         const userProfile = profiles.find(p => p.user_id === userId);
         const stats = userStats[userId];
@@ -169,11 +170,11 @@ const AllPicksPage = () => {
             is_paid_winner: true,
             is_tied: paidWinners.length > 1
           });
-          console.log(`💰 Adding paid winner: ${userProfile.username} with ${stats.correctPicks} correct picks`);
+          console.log(`💰 Storing paid winner: ${userProfile.username} (${stats.correctPicks} correct)`);
         }
       });
       
-      // Add unpaid winners
+      // Store unpaid winners (only if they actually won by beating paid winner)
       unpaidWinners.forEach(userId => {
         const userProfile = profiles.find(p => p.user_id === userId);
         const stats = userStats[userId];
@@ -188,12 +189,17 @@ const AllPicksPage = () => {
             is_paid_winner: false,
             is_tied: unpaidWinners.length > 1
           });
-          console.log(`🚫 Adding unpaid winner: ${userProfile.username} with ${stats.correctPicks} correct picks`);
+          console.log(`🚫 Storing unpaid winner: ${userProfile.username} (${stats.correctPicks} correct - BEAT paid winner)`);
         }
       });
 
-      console.log(`📊 Storing ${winnersData.length} winners for Week ${week}:`, winnersData);
+      if (winnersData.length === 0) {
+        console.log('❌ No valid winners to store');
+        return { success: false, message: 'No valid winners after validation' };
+      }
 
+      console.log(`📊 Storing ${winnersData.length} winners for Week ${week}`);
+      
       // Store in database
       const { data, error } = await supabase
         .from('weekly_winners')
@@ -205,7 +211,7 @@ const AllPicksPage = () => {
         return { success: false, error };
       }
 
-      console.log(`✅ Successfully stored ${winnersData.length} winners for Week ${week}`);
+      console.log(`✅ Successfully stored winners for Week ${week}`);
       return { success: true, data };
     } catch (err) {
       console.error('❌ Error in storeWeeklyWinners:', err);
@@ -215,72 +221,324 @@ const AllPicksPage = () => {
     }
   };
 
-  // FIXED: Check and store winners - only for the active week
-  useEffect(() => {
-    const checkAndStoreWinners = async () => {
-      if (!activeWeek || games.length === 0 || picks.length === 0 || profiles.length === 0) return;
+  // ADD: Cleanup function to remove incorrect winners
+  const cleanupIncorrectWinners = async () => {
+    try {
+      console.log('🧹 Cleaning up incorrect winners...');
+      
+      const { data: allWinners, error: fetchError } = await supabase
+        .from('weekly_winners')
+        .select('*')
+        .eq('season', SEASON_YEAR);
 
-      console.log(`🔍 Checking winners for Week ${activeWeek}...`);
-
-      // Find Monday Night Football game for ACTIVE WEEK only
-      const mondayNightGame = games.find(game => 
-        game.week === activeWeek && game.is_monday_night
-      );
-
-      if (!mondayNightGame) {
-        console.log(`❌ No Monday Night Football game found for Week ${activeWeek}`);
+      if (fetchError) {
+        console.error('Error fetching winners for cleanup:', fetchError);
         return;
       }
 
-      console.log(`📊 MNF game for Week ${activeWeek}: ${mondayNightGame.awayTeam} @ ${mondayNightGame.homeTeam}, Status: ${mondayNightGame.status}`);
+      if (!allWinners) return;
 
-      // Check if MNF game is final FOR THE ACTIVE WEEK
-      if (mondayNightGame.status === "Final") {
-        console.log(`🎯 MNF game is FINAL for Week ${activeWeek}, checking if winners need to be stored...`);
-        
-        // Check if winners already exist in database for THIS WEEK
-        const { data: existingWinners, error } = await supabase
-          .from('weekly_winners')
-          .select('*')
-          .eq('season', SEASON_YEAR)
-          .eq('week', activeWeek);
+      const weeksToDelete: number[] = [];
+      
+      for (const winner of allWinners) {
+        const weekGames = games.filter(game => game.week === winner.week);
+        const playersWithPicks = profiles.filter(profile => {
+          const userPicks = picks.filter(pick => pick.user_id === profile.user_id);
+          const picksForWeek = userPicks.filter(pick => 
+            weekGames.some(game => game.id === pick.game_id)
+          );
+          return picksForWeek.length > 0;
+        }).length;
 
-        if (error) {
-          console.error('Error checking existing winners:', error);
-          return;
+        if (playersWithPicks === 0) {
+          weeksToDelete.push(winner.week);
         }
+      }
 
-        // Only store winners if they haven't been stored yet FOR THIS WEEK
-        if (!existingWinners || existingWinners.length === 0) {
-          console.log(`🏆 No existing winners found for Week ${activeWeek}, storing now...`);
-          await storeWeeklyWinners(activeWeek);
+      const uniqueWeeksToDelete = [...new Set(weeksToDelete)];
+      
+      if (uniqueWeeksToDelete.length > 0) {
+        console.log(`🗑️ Deleting winners for weeks with no players:`, uniqueWeeksToDelete);
+        
+        const { error: deleteError } = await supabase
+          .from('weekly_winners')
+          .delete()
+          .in('week', uniqueWeeksToDelete);
+
+        if (deleteError) {
+          console.error('Error deleting incorrect winners:', deleteError);
         } else {
-          console.log(`✅ Winners already stored for Week ${activeWeek}:`, existingWinners.map(w => `${w.player_name} (${w.is_paid_winner ? 'Paid' : 'Unpaid'})`));
+          console.log('✅ Successfully cleaned up incorrect winners');
         }
       } else {
-        console.log(`⏳ MNF game for Week ${activeWeek} is not final yet: ${mondayNightGame.status}`);
+        console.log('✅ No incorrect winners found');
+      }
+    } catch (err) {
+      console.error('Error in cleanup:', err);
+    }
+  };
+
+  // FIXED: Check and store winners for ALL weeks when their MNF game goes final
+  useEffect(() => {
+    const checkAndStoreWinnersForAllWeeks = async () => {
+      if (games.length === 0 || picks.length === 0 || profiles.length === 0) return;
+
+      console.log(`🔍 Checking ALL weeks for MNF final status...`);
+
+      // Get all weeks that have games
+      const allWeeks = Array.from(new Set(games.map(game => game.week))).sort((a, b) => a - b);
+      
+      for (const week of allWeeks) {
+        // Find Monday Night Football game for this week
+        const mondayNightGame = games.find(game => 
+          game.week === week && game.is_monday_night
+        );
+
+        if (!mondayNightGame) {
+          console.log(`❌ No Monday Night Football game found for Week ${week}`);
+          continue;
+        }
+
+        console.log(`📊 Week ${week} MNF: ${mondayNightGame.awayTeam} @ ${mondayNightGame.homeTeam}, Status: ${mondayNightGame.status}`);
+
+        // Check if MNF game is final for this week
+        if (mondayNightGame.status === "Final") {
+          console.log(`🎯 MNF game is FINAL for Week ${week}, checking if winners need to be stored...`);
+          
+          // Check if winners already exist in database for THIS WEEK
+          const { data: existingWinners, error } = await supabase
+            .from('weekly_winners')
+            .select('*')
+            .eq('season', SEASON_YEAR)
+            .eq('week', week);
+
+          if (error) {
+            console.error('Error checking existing winners:', error);
+            continue;
+          }
+
+          // Only store winners if they haven't been stored yet FOR THIS WEEK
+          if (!existingWinners || existingWinners.length === 0) {
+            console.log(`🏆 No existing winners found for Week ${week}, checking if we have winner data...`);
+            
+            // Check if we have calculated winners for this week
+            const weekGames = games.filter(game => game.week === week);
+            const playersWithPicks = profiles.filter(profile => {
+              const userPicks = picks.filter(pick => pick.user_id === profile.user_id);
+              const picksForWeek = userPicks.filter(pick => 
+                weekGames.some(game => game.id === pick.game_id)
+              );
+              return picksForWeek.length > 0;
+            });
+
+            if (playersWithPicks.length === 0) {
+              console.log(`❌ No players made picks for Week ${week}, skipping winner storage`);
+              continue;
+            }
+
+            console.log(`📊 Calculating winners for Week ${week}...`);
+            
+            // Calculate winners for this specific week
+            const { paidWinners, unpaidWinners } = await calculateWinnersForWeek(week);
+            
+            if (paidWinners.length > 0 || unpaidWinners.length > 0) {
+              console.log(`🏆 Found winners for Week ${week}: Paid: ${paidWinners.length}, Unpaid: ${unpaidWinners.length}`);
+              await storeWeeklyWinners(week);
+            } else {
+              console.log(`❌ No valid winners found for Week ${week}`);
+            }
+          } else {
+            console.log(`✅ Winners already stored for Week ${week}:`, existingWinners.map(w => `${w.player_name} (${w.is_paid_winner ? 'Paid' : 'Unpaid'})`));
+          }
+        } else {
+          console.log(`⏳ MNF game for Week ${week} is not final yet: ${mondayNightGame.status}`);
+        }
       }
     };
 
-    checkAndStoreWinners();
-  }, [games, activeWeek, bestPerformers, profiles, userStats]);
+    // Only run when we have all data loaded
+    if (games.length > 0 && picks.length > 0 && profiles.length > 0) {
+      checkAndStoreWinnersForAllWeeks();
+    }
+  }, [games, picks, profiles]);
+
+  // Function to calculate winners for a specific week
+  const calculateWinnersForWeek = async (week: number) => {
+    const stats: Record<string, UserStats> = {};
+    const playersWithPicks: string[] = [];
+    
+    // Calculate stats for this week
+    profiles.forEach(profile => {
+      const userPicks = picks.filter(pick => pick.user_id === profile.user_id);
+      const weekGames = games.filter(game => game.week === week);
+      
+      const picksForThisWeek = userPicks.filter(pick => 
+        weekGames.some(game => game.id === pick.game_id)
+      );
+      
+      const hasMadePicks = picksForThisWeek.length > 0;
+      
+      if (hasMadePicks) {
+        playersWithPicks.push(profile.user_id);
+      }
+
+      const totalGamesInWeek = weekGames.length;
+      
+      let correctPicks = 0;
+      weekGames.forEach(game => {
+        const userPick = userPicks.find(p => p.game_id === game.id);
+        if (userPick && game.status === "Final" && game.winner !== null && userPick.selected_team === game.winner) {
+          correctPicks++;
+        }
+      });
+
+      const percentage = totalGamesInWeek > 0 ? Math.round((correctPicks / totalGamesInWeek) * 100) : 0;
+
+      const mondayNightGame = weekGames.find(game => game.is_monday_night);
+      const mondayNightPickValue = userPicks.find(p => p.game_id === mondayNightGame?.id)?.total_points;
+      const actualMondayTotalValue = mondayNightGame?.actual_total_points;
+      
+      const mondayNightPick = mondayNightPickValue !== undefined ? mondayNightPickValue : null;
+      const actualMondayTotal = actualMondayTotalValue !== undefined ? actualMondayTotalValue : null;
+      
+      let mondayNightDifference = null;
+      if (mondayNightPick !== null && actualMondayTotal !== null) {
+        mondayNightDifference = Math.abs(mondayNightPick - actualMondayTotal);
+      }
+
+      stats[profile.user_id] = {
+        correctPicks,
+        totalPicks: totalGamesInWeek,
+        percentage,
+        mondayNightPick,
+        actualMondayTotal,
+        mondayNightDifference,
+        hasMadePicks
+      };
+    });
+
+    // If no players made picks for this week, no winners
+    if (playersWithPicks.length === 0) {
+      return { paidWinners: [], unpaidWinners: [] };
+    }
+
+    // Get paid status for this week
+    const paidStatusForWeek: Record<string, boolean> = {};
+    const { data: paidData } = await supabase
+      .from('weekly_payments')
+      .select('user_id, is_paid')
+      .eq('week_number', week)
+      .eq('season_year', SEASON_YEAR);
+
+    paidData?.forEach(payment => {
+      paidStatusForWeek[payment.user_id] = payment.is_paid || false;
+    });
+
+    profiles.forEach(profile => {
+      if (!(profile.user_id in paidStatusForWeek)) {
+        paidStatusForWeek[profile.user_id] = false;
+      }
+    });
+
+    // Separate players by paid status
+    const paidPlayers = playersWithPicks.filter(userId => paidStatusForWeek[userId] || false);
+    const unpaidPlayers = playersWithPicks.filter(userId => !paidStatusForWeek[userId]);
+    
+    console.log(`💰 Week ${week} - Paid players:`, paidPlayers);
+    console.log(`🚫 Week ${week} - Unpaid players:`, unpaidPlayers);
+
+    // Find PAID winner(s)
+    let maxCorrectPaid = 0;
+    let paidWinners: string[] = [];
+    
+    if (paidPlayers.length > 0) {
+      paidPlayers.forEach(userId => {
+        const userStat = stats[userId];
+        if (userStat.correctPicks > maxCorrectPaid) {
+          maxCorrectPaid = userStat.correctPicks;
+        }
+      });
+      
+      const paidPlayersWithMax = paidPlayers.filter(userId => 
+        stats[userId].correctPicks === maxCorrectPaid
+      );
+      
+      if (paidPlayersWithMax.length === 1) {
+        paidWinners = paidPlayersWithMax;
+      } else if (paidPlayersWithMax.length > 1) {
+        let bestMNFDifference = Infinity;
+        paidPlayersWithMax.forEach(userId => {
+          const userStat = stats[userId];
+          if (userStat.mondayNightDifference !== null && userStat.mondayNightDifference < bestMNFDifference) {
+            bestMNFDifference = userStat.mondayNightDifference;
+          }
+        });
+        
+        paidPlayersWithMax.forEach(userId => {
+          const userStat = stats[userId];
+          if (userStat.mondayNightDifference === bestMNFDifference) {
+            paidWinners.push(userId);
+          }
+        });
+      }
+    }
+
+    // Find UNPAID winner(s) - ONLY if they BEAT the paid winner's score
+    let unpaidWinners: string[] = [];
+    
+    if (unpaidPlayers.length > 0 && maxCorrectPaid > 0) {
+      let maxCorrectUnpaid = 0;
+      unpaidPlayers.forEach(userId => {
+        const userStat = stats[userId];
+        if (userStat.correctPicks > maxCorrectUnpaid) {
+          maxCorrectUnpaid = userStat.correctPicks;
+        }
+      });
+      
+      // UNPAID player only wins if they have MORE correct picks than the paid winner
+      if (maxCorrectUnpaid > maxCorrectPaid) {
+        const unpaidPlayersWithMax = unpaidPlayers.filter(userId => 
+          stats[userId].correctPicks === maxCorrectUnpaid
+        );
+        
+        if (unpaidPlayersWithMax.length === 1) {
+          unpaidWinners = unpaidPlayersWithMax;
+        } else if (unpaidPlayersWithMax.length > 1) {
+          let bestMNFDifference = Infinity;
+          unpaidPlayersWithMax.forEach(userId => {
+            const userStat = stats[userId];
+            if (userStat.mondayNightDifference !== null && userStat.mondayNightDifference < bestMNFDifference) {
+              bestMNFDifference = userStat.mondayNightDifference;
+            }
+          });
+          
+          unpaidPlayersWithMax.forEach(userId => {
+            const userStat = stats[userId];
+            if (userStat.mondayNightDifference === bestMNFDifference) {
+              unpaidWinners.push(userId);
+            }
+          });
+        }
+      }
+    }
+
+    console.log(`✅ CALCULATED for Week ${week}: Paid: ${paidWinners.length}, Unpaid: ${unpaidWinners.length}`);
+    return { paidWinners, unpaidWinners };
+  };
 
   // Add this function to debug week detection
   const debugWeekDetection = async () => {
     console.log("🔍 DEBUG WEEK DETECTION:");
     console.log("Active Week:", activeWeek);
     
-    // Check all MNF games and their status
     const mnfGames = games.filter(game => game.is_monday_night);
     console.log("All MNF Games:", mnfGames.map(g => `Week ${g.week}: ${g.awayTeam} @ ${g.homeTeam} - ${g.status}`));
     
-    // Check current week's MNF game
     if (activeWeek) {
       const currentMNF = games.find(game => game.week === activeWeek && game.is_monday_night);
       console.log(`Current Week ${activeWeek} MNF:`, currentMNF);
     }
     
-    // Check existing winners in database
     const { data: allWinners } = await supabase
       .from('weekly_winners')
       .select('*')
@@ -288,6 +546,33 @@ const AllPicksPage = () => {
       .order('week');
     
     console.log("Existing winners in DB:", allWinners);
+  };
+
+  // ADD: Enhanced debug function to see why week detection is working the way it is
+  const debugCurrentWeek = () => {
+    console.log("🔍 DEBUG CURRENT WEEK DETECTION:");
+    console.log("Current time (MST):", getNowMST());
+    
+    const weekNumbers = Array.from(new Set(games.map((g) => g.week))).sort((a, b) => a - b);
+    console.log("All weeks:", weekNumbers);
+    
+    weekNumbers.forEach(week => {
+      const weekGames = games.filter(g => g.week === week);
+      const nowMST = getNowMST();
+      
+      const hasUpcomingGames = weekGames.some(game => new Date(game.startTime) > nowMST);
+      const hasLiveGames = weekGames.some(game => game.status === "InProgress");
+      const allGamesFinal = weekGames.every(game => game.status === "Final");
+      const gameTimes = weekGames.map(g => `${g.awayTeam} @ ${g.homeTeam} - ${new Date(g.startTime).toLocaleString()} (${g.status})`);
+      
+      console.log(`Week ${week}:`);
+      console.log(`  - Upcoming games: ${hasUpcomingGames}`);
+      console.log(`  - Live games: ${hasLiveGames}`);
+      console.log(`  - All final: ${allGamesFinal}`);
+      console.log(`  - Games:`, gameTimes);
+    });
+    
+    console.log("Current active week:", activeWeek);
   };
 
   // Fetch paid status from weekly_payments table
@@ -360,7 +645,7 @@ const AllPicksPage = () => {
     }
   };
 
-  // ---------- Fetch all data with improved week detection ----------
+  // FIXED: Fetch all data with CORRECT week detection
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -369,13 +654,11 @@ const AllPicksPage = () => {
         setCurrentUser(user);
         setUserEmail(user?.email || null);
 
-        // UPDATED: Fetch username instead of email
         const { data: profileData } = await supabase
           .from("profiles")
           .select("user_id, username, first_name, last_name, email, is_admin");
         setProfiles(profileData || []);
 
-        // Check if current user is admin
         if (user) {
           const currentUserProfile = profileData?.find(p => p.user_id === user.id);
           setIsAdmin(currentUserProfile?.is_admin || false);
@@ -383,16 +666,13 @@ const AllPicksPage = () => {
 
         const { data: gameData } = await supabase.from("games").select("*");
         
-        // FILTER OUT BYE WEEK GAMES - same as MakePicksPage
         const filteredGameData = (gameData || []).filter((g: any) => 
           g.team_a && g.team_b && 
           g.team_a.trim() !== '' && g.team_b.trim() !== '' &&
           g.team_a.toLowerCase() !== 'bye' && g.team_b.toLowerCase() !== 'bye'
         );
 
-        // Convert UTC times to MST (same as MakePicksPage)
         const mappedGames: Game[] = filteredGameData.map((g: any) => {
-          // Convert UTC time to MST (subtract 7 hours for UTC to MST)
           const utcDate = new Date(g.start_time);
           const mstDate = new Date(utcDate.getTime() - 7 * 60 * 60 * 1000);
 
@@ -400,9 +680,8 @@ const AllPicksPage = () => {
             id: g.id,
             week: g.week,
             startTime: mstDate.toISOString(),
-            // FIXED: Swapped homeTeam and awayTeam to be correct
-            homeTeam: g.team_a,  // team_a is home team
-            awayTeam: g.team_b,  // team_b is away team
+            homeTeam: g.team_a,
+            awayTeam: g.team_b,
             home_score: g.home_score,
             away_score: g.away_score,
             winner: g.winner,
@@ -420,52 +699,58 @@ const AllPicksPage = () => {
         const { data: pickData } = await supabase.from("game_picks").select("*");
         setPicks(pickData || []);
 
-        // IMPROVED WEEK SELECTION LOGIC - same as MakePicksPage
+        // FIXED: IMPROVED WEEK SELECTION - Find the CURRENT week with upcoming/live games
         if (!userSelectedWeek) {
           const weekNumbers = Array.from(new Set(sortedGames.map((g) => g.week))).sort((a, b) => a - b);
           const nowMST = getNowMST();
           
           let newActiveWeek = activeWeek;
           
-          // Find the current week by checking each week from lowest to highest
+          console.log("🔍 WEEK DETECTION LOGIC:");
+          console.log("All weeks:", weekNumbers);
+          
+          // Find the current week - look for weeks with upcoming or live games
           for (let week of weekNumbers) {
             const weekGames = sortedGames.filter(g => g.week === week);
             
             if (weekGames.length === 0) continue;
             
-            // Check if this week has any upcoming or in-progress games
-            const hasActiveGames = weekGames.some(game => {
-              const gameTime = new Date(game.startTime);
-              return gameTime > nowMST || (gameTime <= nowMST && game.status !== "Final");
-            });
-            
-            // Check if all games are final
+            const hasUpcomingGames = weekGames.some(game => new Date(game.startTime) > nowMST);
+            const hasLiveGames = weekGames.some(game => game.status === "InProgress");
             const allGamesFinal = weekGames.every(game => game.status === "Final");
             
-            // If this week has active games, use it
-            if (hasActiveGames) {
+            console.log(`Week ${week}: upcoming=${hasUpcomingGames}, live=${hasLiveGames}, allFinal=${allGamesFinal}`);
+            
+            // Priority 1: Weeks with live games
+            if (hasLiveGames) {
               newActiveWeek = week;
-              console.log(`🎯 Setting active week to ${week} - has active games`);
+              console.log(`🎯 Setting active week to ${week} - has LIVE games`);
               break;
             }
             
-            // If all games are final and we haven't found an active week yet, 
-            // keep track of this as a potential fallback
-            if (allGamesFinal && !newActiveWeek) {
+            // Priority 2: Weeks with upcoming games (not all final)
+            if (hasUpcomingGames && !allGamesFinal) {
               newActiveWeek = week;
-              console.log(`📌 Week ${week} as fallback - all games final`);
+              console.log(`🎯 Setting active week to ${week} - has UPCOMING games`);
+              break;
+            }
+            
+            // Priority 3: If we haven't found an active week yet, use the most recent week with games
+            if (!newActiveWeek) {
+              newActiveWeek = week;
+              console.log(`📌 Setting fallback week to ${week}`);
             }
           }
           
-          // If no active week found but we have a fallback (most recent completed week), use it
+          // Final fallback: use the highest week number
+          if (!newActiveWeek && weekNumbers.length > 0) {
+            newActiveWeek = weekNumbers[weekNumbers.length - 1];
+            console.log(`🔄 Using highest week as fallback: ${newActiveWeek}`);
+          }
+          
           if (newActiveWeek) {
             setActiveWeek(newActiveWeek);
-            console.log(`📅 Final active week: ${newActiveWeek}`);
-          } else {
-            // Final fallback
-            newActiveWeek = weekNumbers[weekNumbers.length - 1] || 1;
-            setActiveWeek(newActiveWeek);
-            console.log(`🎯 Final fallback: using week ${newActiveWeek}`);
+            console.log(`📅 FINAL active week: ${newActiveWeek}`);
           }
         }
         
@@ -479,6 +764,13 @@ const AllPicksPage = () => {
     fetchData();
   }, [userSelectedWeek]);
 
+  // Call cleanup when component mounts
+  useEffect(() => {
+    if (games.length > 0 && profiles.length > 0 && picks.length > 0) {
+      cleanupIncorrectWinners();
+    }
+  }, [games, profiles, picks]);
+
   // Refetch paid status when active week changes
   useEffect(() => {
     if (activeWeek && profiles.length > 0) {
@@ -486,42 +778,37 @@ const AllPicksPage = () => {
     }
   }, [activeWeek, profiles]);
 
-  // ---------- Calculate user stats and best performers ----------
+  // FIXED: Calculate user stats and best performers for ACTIVE WEEK only
   useEffect(() => {
     if (games.length === 0 || picks.length === 0 || profiles.length === 0 || !activeWeek) return;
 
     const stats: Record<string, UserStats> = {};
+    const playersWithPicks: string[] = [];
     
-    // Track best performances separately for paid and unpaid
-    let maxCorrectPicksPaid = 0;
-    let maxCorrectPicksUnpaid = 0;
-
     profiles.forEach(profile => {
       const userPicks = picks.filter(pick => pick.user_id === profile.user_id);
       const weekGames = games.filter(game => game.week === activeWeek);
       
-      // Count how many picks they made for this week
       const picksForThisWeek = userPicks.filter(pick => 
         weekGames.some(game => game.id === pick.game_id)
       );
       
       const hasMadePicks = picksForThisWeek.length > 0;
+      
+      if (hasMadePicks) {
+        playersWithPicks.push(profile.user_id);
+      }
 
       const totalGamesInWeek = weekGames.length;
       
       let correctPicks = 0;
-
       weekGames.forEach(game => {
         const userPick = userPicks.find(p => p.game_id === game.id);
-        if (userPick) {
-          // Only count as correct if the game is final and they picked the winner
-          if (game.status === "Final" && game.winner !== null && userPick.selected_team === game.winner) {
-            correctPicks++;
-          }
+        if (userPick && game.status === "Final" && game.winner !== null && userPick.selected_team === game.winner) {
+          correctPicks++;
         }
       });
 
-      // Calculate percentage based on total games in week
       const percentage = totalGamesInWeek > 0 ? Math.round((correctPicks / totalGamesInWeek) * 100) : 0;
 
       const mondayNightGame = weekGames.find(game => game.is_monday_night);
@@ -545,128 +832,127 @@ const AllPicksPage = () => {
         mondayNightDifference,
         hasMadePicks
       };
-
-      // Track best performances separately for paid and unpaid
-      const isPaid = paidStatus[profile.user_id] || false;
-      
-      if (hasMadePicks) {
-        if (isPaid && correctPicks > maxCorrectPicksPaid) {
-          maxCorrectPicksPaid = correctPicks;
-        } else if (!isPaid && correctPicks > maxCorrectPicksUnpaid) {
-          maxCorrectPicksUnpaid = correctPicks;
-        }
-      }
     });
 
     console.log(`🎯 Finding winners for week ${activeWeek}`);
-    console.log(`💰 Max correct picks for PAID users: ${maxCorrectPicksPaid}`);
-    console.log(`🚫 Max correct picks for UNPAID users: ${maxCorrectPicksUnpaid}`);
+    console.log(`👥 Players who made picks:`, playersWithPicks);
 
-    // Find best performers separately for paid and unpaid
-    const paidUsersWithMaxCorrect: string[] = [];
-    const unpaidUsersWithMaxCorrect: string[] = [];
+    // If no players made picks for this week, no winners
+    if (playersWithPicks.length === 0) {
+      console.log(`❌ No players made picks for week ${activeWeek}`);
+      setUserStats(stats);
+      setBestPerformers({
+        paidMostCorrect: [],
+        unpaidMostCorrect: []
+      });
+      return;
+    }
 
-    // Find all PAID users who have the maximum correct picks among paid users
-    const paidUsersWithPicks = profiles.filter(profile => {
-      const userStat = stats[profile.user_id];
-      const isPaid = paidStatus[profile.user_id] || false;
-      return isPaid && userStat.hasMadePicks && userStat.correctPicks === maxCorrectPicksPaid;
-    });
+    // Separate players by paid status
+    const paidPlayers = playersWithPicks.filter(userId => paidStatus[userId] || false);
+    const unpaidPlayers = playersWithPicks.filter(userId => !paidStatus[userId]);
+    
+    console.log(`💰 Paid players:`, paidPlayers);
+    console.log(`🚫 Unpaid players:`, unpaidPlayers);
 
-    console.log(`💰 Paid users with max correct (${maxCorrectPicksPaid}):`, paidUsersWithPicks.map(p => p.username));
-
-    // Find all UNPAID users who have the maximum correct picks among unpaid users
-    const unpaidUsersWithPicks = profiles.filter(profile => {
-      const userStat = stats[profile.user_id];
-      const isPaid = paidStatus[profile.user_id] || false;
-      return !isPaid && userStat.hasMadePicks && userStat.correctPicks === maxCorrectPicksUnpaid;
-    });
-
-    console.log(`🚫 Unpaid users with max correct (${maxCorrectPicksUnpaid}):`, unpaidUsersWithPicks.map(p => p.username));
-
-    // TIE-BREAKER LOGIC: Handle ties separately for paid and unpaid users
-    if (paidUsersWithPicks.length > 0) {
-      // Find the minimum Monday Night difference among paid users with max correct
-      let minMondayDifferencePaid = Infinity;
-      paidUsersWithPicks.forEach(profile => {
-        const userStat = stats[profile.user_id];
-        // Only consider users who made a Monday Night pick
-        if (userStat.mondayNightDifference !== null) {
-          if (userStat.mondayNightDifference < minMondayDifferencePaid) {
-            minMondayDifferencePaid = userStat.mondayNightDifference;
-          }
+    // Find PAID winner(s)
+    let maxCorrectPaid = 0;
+    let paidWinners: string[] = [];
+    
+    if (paidPlayers.length > 0) {
+      paidPlayers.forEach(userId => {
+        const userStat = stats[userId];
+        if (userStat.correctPicks > maxCorrectPaid) {
+          maxCorrectPaid = userStat.correctPicks;
         }
       });
+      
+      const paidPlayersWithMax = paidPlayers.filter(userId => 
+        stats[userId].correctPicks === maxCorrectPaid
+      );
+      
+      console.log(`💰 Paid players with ${maxCorrectPaid} correct:`, paidPlayersWithMax);
 
-      console.log(`📊 Min MNF difference for paid winners:`, minMondayDifferencePaid);
-
-      // If no paid users made MNF picks, all paid users with max correct are winners
-      if (minMondayDifferencePaid === Infinity) {
-        paidUsersWithPicks.forEach(profile => {
-          paidUsersWithMaxCorrect.push(profile.user_id);
-        });
-        console.log(`🏆 All paid users with max correct are winners (no MNF tie-breaker)`);
-      } else {
-        // Add all paid users with the minimum Monday Night difference
-        paidUsersWithPicks.forEach(profile => {
-          const userStat = stats[profile.user_id];
-          if (userStat.mondayNightDifference === minMondayDifferencePaid) {
-            paidUsersWithMaxCorrect.push(profile.user_id);
+      if (paidPlayersWithMax.length === 1) {
+        paidWinners = paidPlayersWithMax;
+      } else if (paidPlayersWithMax.length > 1) {
+        let bestMNFDifference = Infinity;
+        paidPlayersWithMax.forEach(userId => {
+          const userStat = stats[userId];
+          if (userStat.mondayNightDifference !== null && userStat.mondayNightDifference < bestMNFDifference) {
+            bestMNFDifference = userStat.mondayNightDifference;
           }
         });
-        console.log(`🏆 Paid winners after MNF tie-breaker:`, paidUsersWithMaxCorrect);
+        
+        paidPlayersWithMax.forEach(userId => {
+          const userStat = stats[userId];
+          if (userStat.mondayNightDifference === bestMNFDifference) {
+            paidWinners.push(userId);
+          }
+        });
+        
+        console.log(`🏆 Paid winners after MNF tie-breaker:`, paidWinners);
       }
     }
 
-    if (unpaidUsersWithPicks.length > 0) {
-      // Find the minimum Monday Night difference among unpaid users with max correct
-      let minMondayDifferenceUnpaid = Infinity;
-      unpaidUsersWithPicks.forEach(profile => {
-        const userStat = stats[profile.user_id];
-        // Only consider users who made a Monday Night pick
-        if (userStat.mondayNightDifference !== null) {
-          if (userStat.mondayNightDifference < minMondayDifferenceUnpaid) {
-            minMondayDifferenceUnpaid = userStat.mondayNightDifference;
-          }
+    // Find UNPAID winner(s) - ONLY if they BEAT the paid winner's score
+    let unpaidWinners: string[] = [];
+    
+    if (unpaidPlayers.length > 0 && maxCorrectPaid > 0) {
+      let maxCorrectUnpaid = 0;
+      unpaidPlayers.forEach(userId => {
+        const userStat = stats[userId];
+        if (userStat.correctPicks > maxCorrectUnpaid) {
+          maxCorrectUnpaid = userStat.correctPicks;
         }
       });
-
-      console.log(`📊 Min MNF difference for unpaid winners:`, minMondayDifferenceUnpaid);
-
-      // If no unpaid users made MNF picks, all unpaid users with max correct are winners
-      if (minMondayDifferenceUnpaid === Infinity) {
-        unpaidUsersWithPicks.forEach(profile => {
-          unpaidUsersWithMaxCorrect.push(profile.user_id);
-        });
-        console.log(`🥈 All unpaid users with max correct are winners (no MNF tie-breaker)`);
+      
+      console.log(`🚫 Max correct among unpaid: ${maxCorrectUnpaid} vs Paid winner: ${maxCorrectPaid}`);
+      
+      // UNPAID player only wins if they have MORE correct picks than the paid winner
+      if (maxCorrectUnpaid > maxCorrectPaid) {
+        const unpaidPlayersWithMax = unpaidPlayers.filter(userId => 
+          stats[userId].correctPicks === maxCorrectUnpaid
+        );
+        
+        if (unpaidPlayersWithMax.length === 1) {
+          unpaidWinners = unpaidPlayersWithMax;
+        } else if (unpaidPlayersWithMax.length > 1) {
+          let bestMNFDifference = Infinity;
+          unpaidPlayersWithMax.forEach(userId => {
+            const userStat = stats[userId];
+            if (userStat.mondayNightDifference !== null && userStat.mondayNightDifference < bestMNFDifference) {
+              bestMNFDifference = userStat.mondayNightDifference;
+            }
+          });
+          
+          unpaidPlayersWithMax.forEach(userId => {
+            const userStat = stats[userId];
+            if (userStat.mondayNightDifference === bestMNFDifference) {
+              unpaidWinners.push(userId);
+            }
+          });
+        }
+        console.log(`🥈 Unpaid winners (beat paid winner):`, unpaidWinners);
       } else {
-        // Add all unpaid users with the minimum Monday Night difference
-        unpaidUsersWithPicks.forEach(profile => {
-          const userStat = stats[profile.user_id];
-          if (userStat.mondayNightDifference === minMondayDifferenceUnpaid) {
-            unpaidUsersWithMaxCorrect.push(profile.user_id);
-          }
-        });
-        console.log(`🥈 Unpaid winners after MNF tie-breaker:`, unpaidUsersWithMaxCorrect);
+        console.log(`❌ No unpaid winners - none beat paid winner's score of ${maxCorrectPaid}`);
       }
     }
+
+    console.log(`✅ FINAL RESULTS for week ${activeWeek}:`);
+    console.log(`🏆 Paid Winners:`, paidWinners.map(id => {
+      const profile = profiles.find(p => p.user_id === id);
+      return `${profile?.username} (${stats[id]?.correctPicks} correct, MNF: ${stats[id]?.mondayNightDifference})`;
+    }));
+    console.log(`🥈 Unpaid Winners:`, unpaidWinners.map(id => {
+      const profile = profiles.find(p => p.user_id === id);
+      return `${profile?.username} (${stats[id]?.correctPicks} correct, MNF: ${stats[id]?.mondayNightDifference})`;
+    }));
 
     setUserStats(stats);
     setBestPerformers({
-      paidMostCorrect: paidUsersWithMaxCorrect,
-      unpaidMostCorrect: unpaidUsersWithMaxCorrect
-    });
-
-    // DEBUG: Log which users are being shown
-    console.log("📊 FINAL RESULTS for week", activeWeek, ":");
-    console.log("🏆 Paid Most Correct:", paidUsersWithMaxCorrect);
-    console.log("🥈 Unpaid Most Correct:", unpaidUsersWithMaxCorrect);
-    
-    profiles.forEach(profile => {
-      const userStat = stats[profile.user_id];
-      if (userStat.hasMadePicks) {
-        console.log(`✅ ${profile.username}: ${userStat.correctPicks}/${userStat.totalPicks} correct, MNF Diff: ${userStat.mondayNightDifference}, Paid: ${paidStatus[profile.user_id]}`);
-      }
+      paidMostCorrect: paidWinners,
+      unpaidMostCorrect: unpaidWinners
     });
   }, [games, picks, profiles, activeWeek, paidStatus]);
 
@@ -689,7 +975,6 @@ const AllPicksPage = () => {
 
   // Sort profiles - FIXED: Show ALL users who made picks
   const getSortedProfiles = () => {
-    // Filter to only show users who made picks for this week
     const usersWithPicks = profiles.filter(profile => {
       const stats = userStats[profile.user_id];
       return stats?.hasMadePicks || false;
@@ -966,8 +1251,14 @@ const AllPicksPage = () => {
               </button>
               
               <button
+                onClick={debugCurrentWeek}
+                className="bg-purple-500 text-white px-4 py-2 rounded font-semibold hover:bg-purple-600 transition-colors"
+              >
+                🔍 Debug Current Week
+              </button>
+              
+              <button
                 onClick={async () => {
-                  // Check existing winners
                   const { data: existingWinners } = await supabase
                     .from('weekly_winners')
                     .select('*')
@@ -1209,11 +1500,10 @@ const AllPicksPage = () => {
 
                     const userPaidStatus = paidStatus[user.user_id] || false;
                     
-                    // Determine winner status - unpaid winners highlighted in orange, paid winners in green
+                    // Determine winner status
                     const isPaidMostCorrect = bestPerformers.paidMostCorrect.includes(user.user_id);
                     const isUnpaidMostCorrect = bestPerformers.unpaidMostCorrect.includes(user.user_id);
 
-                    // NEW LOGIC: Highlight unpaid winners in orange, paid winners in green
                     const isWinner = isPaidMostCorrect || isUnpaidMostCorrect;
                     const isPaidWinner = isPaidMostCorrect;
                     const isUnpaidWinner = isUnpaidMostCorrect;
@@ -1297,7 +1587,6 @@ const AllPicksPage = () => {
                           onTouchStart={() => setHoveredUser(user.user_id)}
                         >
                           <div className="cursor-default">
-                            {/* UPDATED: Show username instead of email */}
                             <span className="text-gray-900 font-bold">{user.username}</span>
                             {isPaidWinner && <div className="text-xs text-green-700 mt-1">🏆 Most Correct (Paid Winner)</div>}
                             {isUnpaidWinner && <div className="text-xs text-orange-700 mt-1">🥈 Most Correct (Would Have Won)</div>}
