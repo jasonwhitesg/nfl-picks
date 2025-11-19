@@ -4,47 +4,62 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 
-interface PlayerStats {
+type Game = {
+  id: string;
+  homeTeam: string;
+  awayTeam: string;
+  startTime: string;
+  week: number;
+  home_score?: number | null;
+  away_score?: number | null;
+  winner?: string | null;
+  status?: string | null;
+  is_monday_night?: boolean;
+  actual_total_points?: number | null;
+};
+
+type Pick = {
+  user_id: string;
+  game_id: string;
+  selected_team: string;
+  lock_time: string;
+  total_points?: number | null;
+};
+
+type Profile = {
   user_id: string;
   username: string;
   first_name: string;
   last_name: string;
   email: string;
-  total_games: number;
-  correct_picks: number;
-  win_percentage: number;
-  current_streak: number;
-  best_streak: number;
-  weekly_wins: number;
-  total_paid: number;
-  rank: number;
-}
+  is_admin?: boolean;
+};
 
-interface WeeklyWinner {
-  season: number;
-  week: number;
-  player_name: string;
-  correct_picks: number;
-  tiebreaker: number | null;
-  is_paid_winner: boolean;
-  is_tied: boolean;
-}
-
-interface SeasonConfig {
-  current_week: number;
-  season_year: number;
-}
+type UserStanding = {
+  user_id: string;
+  username: string;
+  first_name: string;
+  last_name: string;
+  correctPicks: number;
+  incorrectPicks: number;
+  totalCompletedGames: number;
+  percentage: number;
+  currentStreak: number;
+  bestStreak: number;
+  weeklyWins: number;
+  totalWinnings: number;
+};
 
 export default function StandingsPage() {
   const router = useRouter();
   const [headerExpanded, setHeaderExpanded] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
-  const [playerStats, setPlayerStats] = useState<PlayerStats[]>([]);
-  const [weeklyWinners, setWeeklyWinners] = useState<WeeklyWinner[]>([]);
+  const [games, setGames] = useState<Game[]>([]);
+  const [picks, setPicks] = useState<Pick[]>([]);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [userStandings, setUserStandings] = useState<UserStanding[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'standings' | 'weekly' | 'history'>('standings');
-  const [seasonConfig, setSeasonConfig] = useState<SeasonConfig>({ current_week: 1, season_year: 2025 });
 
   // Navigation items
   const navItems = [
@@ -57,11 +72,23 @@ export default function StandingsPage() {
     { href: "/profile", label: "Profile", icon: "👤" },
   ];
 
+  // Get current time in MST
+  function getNowMST(): Date {
+    return new Date(
+      new Date().toLocaleString("en-US", { timeZone: "America/Denver" })
+    );
+  }
+
   useEffect(() => {
     fetchUserData();
-    fetchSeasonConfig();
-    fetchStandingsData();
-  }, [activeTab]);
+    fetchAllData();
+  }, []);
+
+  useEffect(() => {
+    if (games.length > 0 && picks.length > 0 && profiles.length > 0) {
+      calculateStandings();
+    }
+  }, [games, picks, profiles]);
 
   const fetchUserData = async () => {
     try {
@@ -69,222 +96,177 @@ export default function StandingsPage() {
       if (user) {
         setUserEmail(user.email || null);
         
-        // Check if user is admin
         const { data: profile } = await supabase
-          .from('profiles')
-          .select('is_admin')
-          .eq('user_id', user.id)
+          .from("profiles")
+          .select("is_admin")
+          .eq("user_id", user.id)
           .single();
         
         setIsAdmin(profile?.is_admin || false);
       }
     } catch (error) {
-      console.error('Error fetching user data:', error);
+      console.error("Error fetching user data:", error);
     }
   };
 
-  const fetchSeasonConfig = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('season_config')
-        .select('*')
-        .single();
-
-      if (error) throw error;
-      if (data) {
-        setSeasonConfig({
-          current_week: data.current_week,
-          season_year: data.season_year
-        });
-      }
-    } catch (error) {
-      console.error('Error fetching season config:', error);
-    }
-  };
-
-  const fetchStandingsData = async () => {
+  const fetchAllData = async () => {
     try {
       setLoading(true);
 
-      if (activeTab === 'standings') {
-        await fetchPlayerStats();
-      } else if (activeTab === 'weekly') {
-        await fetchWeeklyWinners();
-      } else if (activeTab === 'history') {
-        await fetchHistoricalData();
-      }
+      // Fetch profiles
+      const { data: profileData, error: profileError } = await supabase
+        .from("profiles")
+        .select("user_id, username, first_name, last_name, email, is_admin")
+        .order('username');
 
-    } catch (error) {
-      console.error('Error fetching standings data:', error);
-    } finally {
+      if (profileError) throw profileError;
+      setProfiles(profileData || []);
+
+      // Fetch games
+      const { data: gameData, error: gameError } = await supabase
+        .from("games")
+        .select("*")
+        .order('week')
+        .order('start_time');
+
+      if (gameError) throw gameError;
+      
+      const filteredGameData = (gameData || []).filter((g: any) => 
+        g.team_a && g.team_b && 
+        g.team_a.trim() !== '' && g.team_b.trim() !== '' &&
+        g.team_a.toLowerCase() !== 'bye' && g.team_b.toLowerCase() !== 'bye'
+      );
+
+      const mappedGames: Game[] = filteredGameData.map((g: any) => {
+        const utcDate = new Date(g.start_time);
+        const mstDate = new Date(utcDate.getTime() - 7 * 60 * 60 * 1000);
+
+        return {
+          id: g.id,
+          week: g.week,
+          startTime: mstDate.toISOString(),
+          homeTeam: g.team_a,
+          awayTeam: g.team_b,
+          home_score: g.home_score,
+          away_score: g.away_score,
+          winner: g.winner,
+          status: g.status,
+          is_monday_night: g.is_monday_night,
+          actual_total_points: g.actual_total_points,
+        };
+      });
+
+      setGames(mappedGames);
+
+      // Fetch picks
+      const { data: pickData, error: pickError } = await supabase
+        .from("game_picks")
+        .select("*")
+        .order('created_at');
+
+      if (pickError) throw pickError;
+      setPicks(pickData || []);
+      
+      setLoading(false);
+    } catch (err) {
+      console.error("Error loading data:", err);
       setLoading(false);
     }
   };
 
-  const fetchPlayerStats = async () => {
-    try {
-      // First, get all profiles
-      const { data: profiles, error: profilesError } = await supabase
-        .from('profiles')
-        .select('user_id, username, first_name, last_name, email, created_at')
-        .order('username');
+  // Calculate standings correctly - ONLY count completed games
+  const calculateStandings = async () => {
+    const standings: UserStanding[] = [];
+    const completedGames = games.filter(game => game.status === 'Final');
 
-      if (profilesError) throw profilesError;
+    // Fetch weekly winners for winnings calculation
+    const { data: weeklyWinners } = await supabase
+      .from('weekly_winners')
+      .select('*')
+      .eq('season', 2025);
 
-      if (!profiles || profiles.length === 0) {
-        setPlayerStats([]);
-        return;
-      }
+    profiles.forEach(profile => {
+      const userPicks = picks.filter(pick => pick.user_id === profile.user_id);
+      
+      let correctPicks = 0;
+      let totalCompletedGamesPicked = 0;
 
-      // For each profile, calculate their stats
-      const statsPromises = profiles.map(async (profile) => {
-        // Get user's game picks
-        const { data: picks, error: picksError } = await supabase
-          .from('game_picks')
-          .select('*')
-          .eq('user_id', profile.user_id);
-
-        if (picksError) throw picksError;
-
-        // Get games data to check results
-        const { data: games, error: gamesError } = await supabase
-          .from('games')
-          .select('id, winner, start_time')
-          .not('winner', 'is', null);
-
-        if (gamesError) throw gamesError;
-
-        // Calculate stats
-        const totalGames = picks?.length || 0;
-        let correctPicks = 0;
-        let currentStreak = 0;
-        let bestStreak = 0;
-        let tempStreak = 0;
-
-        // Sort picks by game start time to calculate streaks properly
-        const sortedPicks = picks?.sort((a, b) => {
-          const gameA = games?.find(g => g.id === a.game_id);
-          const gameB = games?.find(g => g.id === b.game_id);
-          return new Date(gameA?.start_time || 0).getTime() - new Date(gameB?.start_time || 0).getTime();
-        }) || [];
-
-        sortedPicks.forEach(pick => {
-          const game = games?.find(g => g.id === pick.game_id);
-          if (game && game.winner === pick.selected_team) {
+      completedGames.forEach(game => {
+        const userPick = userPicks.find(p => p.game_id === game.id);
+        if (userPick && game.winner) {
+          totalCompletedGamesPicked++;
+          if (userPick.selected_team === game.winner) {
             correctPicks++;
-            tempStreak++;
-            currentStreak = tempStreak;
-            bestStreak = Math.max(bestStreak, tempStreak);
-          } else {
-            tempStreak = 0;
           }
-        });
-
-        // Get weekly wins count
-        const { data: weeklyWinsData, error: weeklyWinsError } = await supabase
-          .from('weekly_winners')
-          .select('id')
-          .eq('player_name', profile.username)
-          .eq('season', seasonConfig.season_year);
-
-        const weeklyWins = weeklyWinsData?.length || 0;
-
-        // Get total payments
-        const { data: paymentsData, error: paymentsError } = await supabase
-          .from('weekly_payments')
-          .select('id')
-          .eq('user_id', profile.user_id)
-          .eq('is_paid', true)
-          .eq('season_year', seasonConfig.season_year);
-
-        const totalPaid = (paymentsData?.length || 0) * 25; // Assuming $25 per win
-
-        const winPercentage = totalGames > 0 ? Math.round((correctPicks / totalGames) * 100 * 10) / 10 : 0;
-
-        return {
-          user_id: profile.user_id,
-          username: profile.username,
-          first_name: profile.first_name,
-          last_name: profile.last_name,
-          email: profile.email,
-          total_games: totalGames,
-          correct_picks: correctPicks,
-          win_percentage: winPercentage,
-          current_streak: currentStreak,
-          best_streak: bestStreak,
-          weekly_wins: weeklyWins,
-          total_paid: totalPaid,
-          rank: 0 // Will be calculated after sorting
-        };
+        }
       });
 
-      const allStats = await Promise.all(statsPromises);
+      const incorrectPicks = totalCompletedGamesPicked - correctPicks;
+      const percentage = totalCompletedGamesPicked > 0 
+        ? Number(((correctPicks / totalCompletedGamesPicked) * 100).toFixed(1))
+        : 0;
 
-      // Sort by correct picks (primary) and win percentage (secondary)
-      const sortedStats = allStats
-        .filter(stats => stats.total_games > 0) // Only show players who have made picks
-        .sort((a, b) => {
-          if (b.correct_picks !== a.correct_picks) {
-            return b.correct_picks - a.correct_picks;
-          }
-          return b.win_percentage - a.win_percentage;
+      // Calculate streaks (only for completed games)
+      let currentStreak = 0;
+      let bestStreak = 0;
+      let tempStreak = 0;
+
+      // Sort completed games by start time to calculate streaks chronologically
+      const userCompletedGames = completedGames
+        .filter(game => {
+          const userPick = userPicks.find(p => p.game_id === game.id);
+          return userPick && game.winner;
         })
-        .map((stats, index) => ({
-          ...stats,
-          rank: index + 1
-        }));
+        .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
 
-      setPlayerStats(sortedStats);
+      userCompletedGames.forEach(game => {
+        const userPick = userPicks.find(p => p.game_id === game.id);
+        if (userPick && game.winner) {
+          if (userPick.selected_team === game.winner) {
+            tempStreak++;
+            currentStreak = tempStreak;
+            if (tempStreak > bestStreak) {
+              bestStreak = tempStreak;
+            }
+          } else {
+            tempStreak = 0;
+            currentStreak = 0;
+          }
+        }
+      });
 
-    } catch (error) {
-      console.error('Error fetching player stats:', error);
-    }
-  };
+      // Count weekly wins and winnings from weekly_winners table
+      const userWeeklyWins = weeklyWinners?.filter(winner => 
+        winner.player_name === profile.username && winner.is_paid_winner
+      ).length || 0;
 
-  const fetchWeeklyWinners = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('weekly_winners')
-        .select('*')
-        .eq('season', seasonConfig.season_year)
-        .order('week', { ascending: false });
+      const totalWinnings = userWeeklyWins * 25; // $25 per win
 
-      if (error) throw error;
-      setWeeklyWinners(data || []);
-    } catch (error) {
-      console.error('Error fetching weekly winners:', error);
-    }
-  };
+      standings.push({
+        user_id: profile.user_id,
+        username: profile.username,
+        first_name: profile.first_name,
+        last_name: profile.last_name,
+        correctPicks,
+        incorrectPicks,
+        totalCompletedGames: totalCompletedGamesPicked,
+        percentage,
+        currentStreak: currentStreak > 0 ? currentStreak : 0,
+        bestStreak,
+        weeklyWins: userWeeklyWins,
+        totalWinnings
+      });
+    });
 
-  const fetchHistoricalData = async () => {
-    // Fetch historical standings data
-    // This would typically involve multiple season data
-    console.log('Fetching historical data...');
-  };
+    // Sort by correct picks first, then percentage
+    const sortedStandings = standings.sort((a, b) => {
+      if (b.correctPicks !== a.correctPicks) {
+        return b.correctPicks - a.correctPicks;
+      }
+      return b.percentage - a.percentage;
+    });
 
-  const getRankColor = (rank: number) => {
-    switch (rank) {
-      case 1: return 'bg-yellow-100 border-yellow-300';
-      case 2: return 'bg-gray-100 border-gray-300';
-      case 3: return 'bg-orange-100 border-orange-300';
-      default: return 'bg-white border-gray-200';
-    }
-  };
-
-  const getRankIcon = (rank: number) => {
-    switch (rank) {
-      case 1: return '🥇';
-      case 2: return '🥈';
-      case 3: return '🥉';
-      default: return `#${rank}`;
-    }
-  };
-
-  const getDisplayName = (player: PlayerStats) => {
-    if (player.first_name && player.last_name) {
-      return `${player.first_name} ${player.last_name}`;
-    }
-    return player.username;
+    setUserStandings(sortedStandings);
   };
 
   const handleLogout = async () => {
@@ -296,7 +278,7 @@ export default function StandingsPage() {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
-          <div className="text-4xl mb-4">⏳</div>
+          <div className="text-4xl mb-4">🏆</div>
           <p className="text-xl text-gray-600">Loading standings...</p>
         </div>
       </div>
@@ -305,12 +287,10 @@ export default function StandingsPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Expandable Header Bar - Opens to the Left */}
+      {/* Expandable Header Bar */}
       <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
-        {/* Main Header Bar */}
         <div className="flex items-center justify-between p-4">
           <div className="flex items-center gap-4">
-            {/* Expand Button */}
             <button
               onClick={() => setHeaderExpanded(!headerExpanded)}
               className="p-2 rounded-lg hover:bg-gray-100 transition-colors flex items-center gap-2"
@@ -321,13 +301,10 @@ export default function StandingsPage() {
                 {headerExpanded ? "Close Menu" : "Menu"}
               </span>
             </button>
-
-            {/* Logo/Title */}
             <h1 className="text-2xl font-bold text-gray-800">NFL Picks</h1>
           </div>
           
           <div className="flex items-center gap-4">
-            {/* User Info */}
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold">
                 {userEmail?.charAt(0).toUpperCase() || "U"}
@@ -342,7 +319,6 @@ export default function StandingsPage() {
               </div>
             </div>
 
-            {/* Logout Button */}
             <button
               onClick={handleLogout}
               className="bg-red-500 text-white px-3 py-2 rounded text-sm font-medium hover:bg-red-600 transition-colors"
@@ -352,17 +328,14 @@ export default function StandingsPage() {
           </div>
         </div>
 
-        {/* Expandable Navigation Panel - Opens to the Left */}
         {headerExpanded && (
           <div className="absolute top-full left-0 w-80 bg-white border-b border-r border-gray-200 shadow-lg z-40">
             <div className="p-6">
-              {/* Navigation Header */}
               <div className="mb-6">
                 <h2 className="text-xl font-bold text-gray-800 mb-2">Navigation</h2>
                 <p className="text-sm text-gray-600">Quick access to all features</p>
               </div>
 
-              {/* Navigation Grid */}
               <div className="grid grid-cols-1 gap-3">
                 {navItems.map((item) => (
                   <a
@@ -389,28 +362,30 @@ export default function StandingsPage() {
                 ))}
               </div>
 
-              {/* Quick Stats */}
               <div className="mt-6 pt-6 border-t border-gray-200">
                 <h3 className="font-semibold text-gray-800 mb-3">Quick Stats</h3>
                 <div className="grid grid-cols-3 gap-3 text-center">
                   <div className="bg-blue-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-blue-600">{playerStats.length}</div>
-                    <div className="text-xs text-blue-800">Players</div>
+                    <div className="text-xl font-bold text-blue-600">
+                      {games.filter(g => g.status === 'Final').length}
+                    </div>
+                    <div className="text-xs text-blue-800">Games</div>
                   </div>
                   <div className="bg-green-50 rounded-lg p-3">
                     <div className="text-xl font-bold text-green-600">
-                      {playerStats.reduce((sum, player) => sum + player.total_games, 0)}
+                      {profiles.length}
                     </div>
-                    <div className="text-xs text-green-800">Total Picks</div>
+                    <div className="text-xs text-green-800">Players</div>
                   </div>
                   <div className="bg-purple-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-purple-600">{seasonConfig.current_week}</div>
+                    <div className="text-xl font-bold text-purple-600">
+                      {Math.max(...games.map(g => g.week))}
+                    </div>
                     <div className="text-xs text-purple-800">Week</div>
                   </div>
                 </div>
               </div>
 
-              {/* Admin Badge */}
               {isAdmin && (
                 <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                   <div className="flex items-center gap-2">
@@ -425,229 +400,117 @@ export default function StandingsPage() {
       </header>
 
       {/* Main Content */}
-      <main className="p-6 max-w-6xl mx-auto">
+      <main className="p-6 max-w-4xl mx-auto">
         {/* Page Header */}
-        <div className="text-center mb-8">
+        <div className="text-center mb-12">
           <h1 className="text-4xl font-bold text-gray-800 mb-4">
-            Season {seasonConfig.season_year} Standings
+            Season Standings
           </h1>
           <p className="text-lg text-gray-600">
             Track player rankings and season performance
           </p>
         </div>
 
-        {/* Tab Navigation */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 mb-8">
-          <div className="flex border-b border-gray-200">
-            <button
-              onClick={() => setActiveTab('standings')}
-              className={`flex-1 py-4 px-6 text-center font-medium transition-colors ${
-                activeTab === 'standings'
-                  ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-500'
-                  : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
-              }`}
-            >
-              🏆 Current Standings
-            </button>
-            <button
-              onClick={() => setActiveTab('weekly')}
-              className={`flex-1 py-4 px-6 text-center font-medium transition-colors ${
-                activeTab === 'weekly'
-                  ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-500'
-                  : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
-              }`}
-            >
-              📅 Weekly Winners
-            </button>
-            <button
-              onClick={() => setActiveTab('history')}
-              className={`flex-1 py-4 px-6 text-center font-medium transition-colors ${
-                activeTab === 'history'
-                  ? 'bg-blue-50 text-blue-700 border-b-2 border-blue-500'
-                  : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
-              }`}
-            >
-              📊 Season History
-            </button>
-          </div>
-
-          {/* Tab Content */}
-          <div className="p-6">
-            {activeTab === 'standings' && (
-              <div>
-                <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-2xl font-bold text-gray-800">Season {seasonConfig.season_year} Leaderboard</h2>
-                  <div className="text-sm text-gray-600">
-                    Week {seasonConfig.current_week} • Updated just now
+        {/* Standings Grid */}
+        <div className="grid gap-6">
+          {userStandings.map((standing, index) => (
+            <div key={standing.user_id} className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-4">
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg ${
+                    index === 0 ? 'bg-yellow-500' :
+                    index === 1 ? 'bg-gray-400' :
+                    index === 2 ? 'bg-orange-500' :
+                    'bg-blue-500'
+                  }`}>
+                    {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `#${index + 1}`}
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-gray-800">
+                      {standing.first_name} {standing.last_name}
+                    </h3>
+                    <p className="text-gray-600">@{standing.username}</p>
                   </div>
                 </div>
-
-                {/* Leaderboard */}
-                {playerStats.length > 0 ? (
-                  <div className="space-y-4">
-                    {playerStats.map((player) => (
-                      <div
-                        key={player.user_id}
-                        className={`border rounded-lg p-6 transition-all hover:shadow-md ${getRankColor(player.rank)}`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-4">
-                            <div className="text-2xl font-bold w-12 text-center">
-                              {getRankIcon(player.rank)}
-                            </div>
-                            <div>
-                              <h3 className="text-xl font-semibold text-gray-800">
-                                {getDisplayName(player)}
-                              </h3>
-                              <p className="text-gray-600">@{player.username}</p>
-                            </div>
-                          </div>
-                          
-                          <div className="text-right">
-                            <div className="text-2xl font-bold text-gray-800">
-                              {player.correct_picks}-{player.total_games - player.correct_picks}
-                            </div>
-                            <div className="text-lg font-semibold text-green-600">
-                              {player.win_percentage}%
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Stats Grid */}
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4 pt-4 border-t border-gray-200">
-                          <div className="text-center">
-                            <div className="text-sm text-gray-600">Current Streak</div>
-                            <div className="text-lg font-semibold text-green-600">
-                              {player.current_streak} {player.current_streak > 0 ? '🔥' : ''}
-                            </div>
-                          </div>
-                          <div className="text-center">
-                            <div className="text-sm text-gray-600">Best Streak</div>
-                            <div className="text-lg font-semibold text-blue-600">
-                              {player.best_streak}
-                            </div>
-                          </div>
-                          <div className="text-center">
-                            <div className="text-sm text-gray-600">Weekly Wins</div>
-                            <div className="text-lg font-semibold text-purple-600">
-                              {player.weekly_wins}
-                            </div>
-                          </div>
-                          <div className="text-center">
-                            <div className="text-sm text-gray-600">Total Winnings</div>
-                            <div className="text-lg font-semibold text-yellow-600">
-                              ${player.total_paid}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                <div className="text-right">
+                  <div className="text-2xl font-bold text-gray-800">
+                    {standing.correctPicks}-{standing.incorrectPicks}
                   </div>
-                ) : (
-                  <div className="text-center py-12">
-                    <div className="text-6xl mb-4">📊</div>
-                    <h3 className="text-xl font-semibold text-gray-800 mb-2">No Player Data Yet</h3>
-                    <p className="text-gray-600">Player statistics will appear here once games start and picks are made.</p>
+                  <div className="text-lg font-semibold text-green-600">
+                    {standing.percentage}%
                   </div>
-                )}
-              </div>
-            )}
-
-            {activeTab === 'weekly' && (
-              <div>
-                <h2 className="text-2xl font-bold text-gray-800 mb-6">Weekly Winners - Season {seasonConfig.season_year}</h2>
-                
-                {weeklyWinners.length > 0 ? (
-                  <div className="grid gap-4">
-                    {weeklyWinners.map((winner, index) => (
-                      <div key={index} className="border border-gray-200 rounded-lg p-6 bg-white">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <h3 className="text-xl font-semibold text-gray-800">
-                              Week {winner.week} Winner{winner.is_tied ? 's (Tied)' : ''}
-                            </h3>
-                            <p className="text-gray-600">{winner.player_name}</p>
-                          </div>
-                          <div className="text-right">
-                            <div className="text-2xl font-bold text-green-600">
-                              {winner.correct_picks} Correct
-                            </div>
-                            {winner.tiebreaker && (
-                              <div className="text-sm text-gray-600">
-                                Tiebreaker: {winner.tiebreaker} pts
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        {winner.is_paid_winner && (
-                          <div className="mt-3 inline-flex items-center gap-2 bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">
-                            💰 Paid Winner
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-center py-12">
-                    <div className="text-6xl mb-4">📅</div>
-                    <h3 className="text-xl font-semibold text-gray-800 mb-2">No Weekly Winners Yet</h3>
-                    <p className="text-gray-600">Weekly winners will appear here as the season progresses.</p>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {activeTab === 'history' && (
-              <div>
-                <h2 className="text-2xl font-bold text-gray-800 mb-6">Season History</h2>
-                
-                {/* Placeholder for historical data */}
-                <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-8 text-center">
-                  <div className="text-6xl mb-4">📊</div>
-                  <h3 className="text-2xl font-bold text-yellow-800 mb-4">
-                    Historical Data Coming Soon
-                  </h3>
-                  <p className="text-yellow-700 mb-4">
-                    This section is being developed. Check back soon for:
-                  </p>
-                  <ul className="text-yellow-700 text-left max-w-md mx-auto space-y-2">
-                    <li>• Multi-season performance tracking</li>
-                    <li>• Year-over-year comparisons</li>
-                    <li>• All-time leaderboards</li>
-                    <li>• Career statistics</li>
-                    <li>• Hall of Fame</li>
-                  </ul>
                 </div>
               </div>
-            )}
-          </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                <div className="text-center">
+                  <div className="text-sm text-gray-600 mb-1">Current Streak</div>
+                  <div className="text-xl font-bold text-orange-600">
+                    {standing.currentStreak} {standing.currentStreak > 0 ? '🔥' : ''}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="text-sm text-gray-600 mb-1">Best Streak</div>
+                  <div className="text-xl font-bold text-purple-600">
+                    {standing.bestStreak}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="text-sm text-gray-600 mb-1">Weekly Wins</div>
+                  <div className="text-xl font-bold text-blue-600">
+                    {standing.weeklyWins}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="text-sm text-gray-600 mb-1">Total Winnings</div>
+                  <div className="text-xl font-bold text-green-600">
+                    ${standing.totalWinnings}
+                  </div>
+                </div>
+              </div>
+
+              {/* Progress bar for win percentage */}
+              <div className="mt-4">
+                <div className="flex justify-between text-sm text-gray-600 mb-1">
+                  <span>Win Percentage</span>
+                  <span>{standing.percentage}%</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-3">
+                  <div 
+                    className="bg-green-500 h-3 rounded-full transition-all duration-500"
+                    style={{ width: `${standing.percentage}%` }}
+                  ></div>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
 
-        {/* Quick Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-2 lg:grid-cols-4 gap-6 mb-8">
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 text-center">
-            <div className="text-3xl font-bold text-blue-600 mb-2">
-              {playerStats.length}
+        {/* Summary Stats */}
+        <div className="mt-8 grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 text-center">
+            <div className="text-2xl font-bold text-blue-600">
+              {profiles.length}
             </div>
-            <div className="text-gray-600 font-medium">Active Players</div>
+            <div className="text-sm text-gray-600">Total Players</div>
           </div>
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 text-center">
-            <div className="text-3xl font-bold text-green-600 mb-2">
-              {playerStats.reduce((sum, player) => sum + player.weekly_wins, 0)}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 text-center">
+            <div className="text-2xl font-bold text-green-600">
+              {userStandings.reduce((sum, standing) => sum + standing.correctPicks, 0)}
             </div>
-            <div className="text-gray-600 font-medium">Weekly Wins</div>
+            <div className="text-sm text-gray-600">Total Correct Picks</div>
           </div>
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 text-center">
-            <div className="text-3xl font-bold text-purple-600 mb-2">
-              {playerStats.length > 0 ? Math.max(...playerStats.map(p => p.best_streak)) : 0}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 text-center">
+            <div className="text-2xl font-bold text-purple-600">
+              {games.filter(g => g.status === 'Final').length}
             </div>
-            <div className="text-gray-600 font-medium">Best Streak</div>
+            <div className="text-sm text-gray-600">Completed Games</div>
           </div>
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 text-center">
-            <div className="text-3xl font-bold text-yellow-600 mb-2">
-              ${playerStats.reduce((sum, player) => sum + player.total_paid, 0)}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 text-center">
+            <div className="text-2xl font-bold text-orange-600">
+              ${userStandings.reduce((sum, standing) => sum + standing.totalWinnings, 0)}
             </div>
-            <div className="text-gray-600 font-medium">Total Paid Out</div>
+            <div className="text-sm text-gray-600">Total Winnings</div>
           </div>
         </div>
       </main>
