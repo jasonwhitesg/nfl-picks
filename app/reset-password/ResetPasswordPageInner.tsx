@@ -1,3 +1,4 @@
+// app/reset-password/ResetPasswordPageInner.tsx
 "use client";
 
 import { useState, useEffect } from "react";
@@ -7,6 +8,7 @@ import { supabase } from "@/lib/supabaseClient";
 export default function ResetPasswordPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
+
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -16,12 +18,13 @@ export default function ResetPasswordPageInner() {
   const [loading, setLoading] = useState(false);
   const [recoveryToken, setRecoveryToken] = useState<string | null>(null);
 
-  // Get the token from query string or hash fragment
   useEffect(() => {
     let token = searchParams.get("access_token");
 
     if (!token && window.location.hash) {
-      const hashParams = new URLSearchParams(window.location.hash.replace("#", ""));
+      const hashParams = new URLSearchParams(
+        window.location.hash.replace("#", "")
+      );
       token = hashParams.get("access_token");
     }
 
@@ -43,7 +46,6 @@ export default function ResetPasswordPageInner() {
 
     setLoading(true);
     try {
-      // Update password using Supabase
       const { error } = await supabase.auth.updateUser({ password });
 
       if (error) setError(error.message);
@@ -117,4 +119,6 @@ export default function ResetPasswordPageInner() {
     </div>
   );
 }
+
+
 
