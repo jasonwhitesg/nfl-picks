@@ -40,14 +40,14 @@ const LoginPage = () => {
   return (
     <div className="flex justify-center items-center min-h-screen bg-gray-100">
       <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md border border-gray-300">
-        <h1 className="text-2xl font-bold mb-6 text-center text-gray-800">
+        <h1 className="text-2xl font-bold mb-6 text-center text-gray-900">
           Login
         </h1>
 
         <form onSubmit={handleLogin} className="flex flex-col gap-4">
           {/* Email */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-gray-900 mb-1">
               Email
             </label>
             <input
@@ -55,14 +55,14 @@ const LoginPage = () => {
               placeholder="Enter your email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600"
+              className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600 text-gray-900 placeholder:text-gray-500"
               required
             />
           </div>
 
           {/* Password */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-gray-900 mb-1">
               Password
             </label>
             <div className="relative">
@@ -71,7 +71,7 @@ const LoginPage = () => {
                 placeholder="Enter your password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600"
+                className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600 text-gray-900 placeholder:text-gray-500"
                 required
               />
               <span
@@ -98,22 +98,22 @@ const LoginPage = () => {
         </form>
 
         {/* Forgot Password */}
-        <p className="mt-4 text-center text-gray-700">
+        <p className="mt-4 text-center text-gray-800">
           Forgot your password?{" "}
           <Link
             href="/reset-password-request"
-            className="text-blue-600 font-semibold underline hover:text-blue-700"
+            className="text-blue-600 font-semibold underline hover:text-blue-800"
           >
             Reset it here
           </Link>
         </p>
 
         {/* Signup link */}
-        <p className="mt-6 text-center text-gray-700">
+        <p className="mt-6 text-center text-gray-800">
           Don't have an account?{" "}
           <Link
             href="/signup"
-            className="text-blue-600 font-semibold underline hover:text-blue-700"
+            className="text-blue-600 font-semibold underline hover:text-blue-800"
           >
             Sign up here
           </Link>
@@ -124,8 +124,3 @@ const LoginPage = () => {
 };
 
 export default LoginPage;
-
-
-
-
-
