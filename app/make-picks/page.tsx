@@ -267,21 +267,19 @@ const MakePicksPage = () => {
     
     const weekGames = gamesByWeek[activeWeek] || [];
     
-    // Only consider SUNDAY games that haven't started yet
-    const upcomingSundayGames = weekGames.filter(game => {
+    // Only consider SUNDAY games
+    const sundayGames = weekGames.filter(game => {
       const gameTime = new Date(game.start_time);
       const dayOfWeek = gameTime.getDay(); // 0 = Sunday
-      return dayOfWeek === 0 && // Only Sunday games
-             game.status !== "Final" && 
-             game.status !== "InProgress";
+      return dayOfWeek === 0; // Only Sunday games
     });
     
-    if (upcomingSundayGames.length === 0) {
+    if (sundayGames.length === 0) {
       return null;
     }
     
     // Find Sunday games at or after 2:00 PM (14:00 hours)
-    const afternoonSundayGames = upcomingSundayGames.filter(game => {
+    const afternoonSundayGames = sundayGames.filter(game => {
       const gameTime = new Date(game.start_time);
       const hours = gameTime.getHours();
       // 14:00 = 2:00 PM
@@ -326,13 +324,16 @@ const MakePicksPage = () => {
         return individualGameLocked;
       }
       
+      // Check if week lock has already occurred (DEN @ LV has started)
+      const weekLocked = now >= weekLockTime;
+      
       // For Sunday games
       if (dayOfWeek === 0) {
         const gameStartsAt2PMOrLater = gameTime.getHours() >= 14;
         
         if (gameStartsAt2PMOrLater) {
           // Sunday games at or after 2:00 PM: lock when earliest 2:00 PM game starts
-          return individualGameLocked || (now >= weekLockTime);
+          return individualGameLocked || weekLocked;
         } else {
           // Sunday games before 2:00 PM: lock individually
           return individualGameLocked;
@@ -341,7 +342,7 @@ const MakePicksPage = () => {
       
       // For Monday games: they lock when the earliest Sunday 2:00 PM game starts
       if (dayOfWeek === 1) {
-        return individualGameLocked || (now >= weekLockTime);
+        return individualGameLocked || weekLocked;
       }
     }
     
@@ -380,6 +381,93 @@ const MakePicksPage = () => {
     const secs = Math.floor((diff / 1000) % 60);
     
     return `${hours}h ${mins}m ${secs}s`;
+  };
+
+  // Get detailed lock message
+  const getLockMessage = (gameTime: Date, gameId: string) => {
+    const dayOfWeek = gameTime.getDay();
+    const weekLockTime = getWeekLockTimeForCurrentWeek();
+    
+    // First check if week is already locked
+    if (weekLockTime && now >= weekLockTime) {
+      // Week is locked - all Sunday 2:00 PM+ and Monday games are locked
+      if ((dayOfWeek === 0 && gameTime.getHours() >= 14) || dayOfWeek === 1) {
+        return "⏰ Week locked - all picks locked";
+      }
+    }
+    
+    // Thursday, Friday, Saturday games always lock individually
+    if (dayOfWeek === 4 || dayOfWeek === 5 || dayOfWeek === 6) {
+      const diff = gameTime.getTime() - now.getTime();
+      if (diff <= 0) {
+        return "⏰ Game locked";
+      }
+      return `⏰ Locks in: ${getCountdown(gameTime.toISOString())}`;
+    }
+    
+    // Sunday games
+    if (dayOfWeek === 0) {
+      if (weekLockTime && gameTime.getHours() >= 14) {
+        const diff = weekLockTime.getTime() - now.getTime();
+        if (diff <= 0) {
+          return "⏰ Week locked - all picks locked";
+        }
+        // Find the earliest Sunday 2:00 PM game for the message
+        const earliestAfternoonGame = gamesByWeek[activeWeek || 0]
+          ?.filter(game => {
+            const gt = new Date(game.start_time);
+            return gt.getDay() === 0 && gt.getHours() >= 14;
+          })
+          ?.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())[0];
+        
+        if (earliestAfternoonGame) {
+          return `⏰ Locks when ${earliestAfternoonGame.awayTeam} @ ${earliestAfternoonGame.homeTeam} starts: ${getCountdown(gameTime.toISOString())}`;
+        }
+        return `⏰ Locks when earliest Sunday 2 PM game starts: ${getCountdown(gameTime.toISOString())}`;
+      } else {
+        const diff = gameTime.getTime() - now.getTime();
+        if (diff <= 0) {
+          return "⏰ Game locked";
+        }
+        return `⏰ Locks in: ${getCountdown(gameTime.toISOString())}`;
+      }
+    }
+    
+    // Monday games
+    if (dayOfWeek === 1) {
+      if (weekLockTime) {
+        const diff = weekLockTime.getTime() - now.getTime();
+        if (diff <= 0) {
+          return "⏰ Week locked - all picks locked";
+        }
+        // Find the earliest Sunday 2:00 PM game for the message
+        const earliestAfternoonGame = gamesByWeek[activeWeek || 0]
+          ?.filter(game => {
+            const gt = new Date(game.start_time);
+            return gt.getDay() === 0 && gt.getHours() >= 14;
+          })
+          ?.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())[0];
+        
+        if (earliestAfternoonGame) {
+          return `⏰ Locks when ${earliestAfternoonGame.awayTeam} @ ${earliestAfternoonGame.homeTeam} starts: ${getCountdown(gameTime.toISOString())}`;
+        }
+        return `⏰ Locks when earliest Sunday 2 PM game starts: ${getCountdown(gameTime.toISOString())}`;
+      } else {
+        // If no Sunday 2:00 PM game in this week, lock individually
+        const diff = gameTime.getTime() - now.getTime();
+        if (diff <= 0) {
+          return "⏰ Game locked";
+        }
+        return `⏰ Locks in: ${getCountdown(gameTime.toISOString())}`;
+      }
+    }
+    
+    // Default fallback
+    const diff = gameTime.getTime() - now.getTime();
+    if (diff <= 0) {
+      return "⏰ Game locked";
+    }
+    return `⏰ Locks in: ${getCountdown(gameTime.toISOString())}`;
   };
 
   // Check if week is complete (all games are final)
@@ -1130,84 +1218,7 @@ const MakePicksPage = () => {
                 {!isFinal && !isLive && (
                   <div className="flex justify-center">
                     <div className="font-bold text-red-600 bg-red-100 px-4 py-2 rounded-lg border-2 border-red-200 text-center shadow-sm">
-                      {(() => {
-                        const gameTime = new Date(g.start_time);
-                        const dayOfWeek = gameTime.getDay();
-                        const weekLockTime = getWeekLockTimeForCurrentWeek();
-                        
-                        // Thursday, Friday, Saturday games always lock individually
-                        if (dayOfWeek === 4 || dayOfWeek === 5 || dayOfWeek === 6) {
-                          const diff = gameTime.getTime() - now.getTime();
-                          if (diff <= 0) {
-                            return "⏰ Game locked";
-                          }
-                          return `⏰ Locks in: ${getCountdown(g.start_time)}`;
-                        }
-                        
-                        // Sunday games
-                        if (dayOfWeek === 0) {
-                          if (weekLockTime && gameTime.getHours() >= 14) {
-                            const diff = weekLockTime.getTime() - now.getTime();
-                            if (diff <= 0) {
-                              return "⏰ Week locked - all picks locked";
-                            }
-                            // Find the earliest Sunday 2:00 PM game for the message
-                            const earliestAfternoonGame = gamesByWeek[activeWeek]
-                              ?.filter(game => {
-                                const gt = new Date(game.start_time);
-                                return gt.getDay() === 0 && gt.getHours() >= 14;
-                              })
-                              ?.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())[0];
-                            
-                            if (earliestAfternoonGame) {
-                              return `⏰ Locks when ${earliestAfternoonGame.awayTeam} @ ${earliestAfternoonGame.homeTeam} starts: ${getCountdown(g.start_time)}`;
-                            }
-                            return `⏰ Locks when earliest Sunday 2 PM game starts: ${getCountdown(g.start_time)}`;
-                          } else {
-                            const diff = gameTime.getTime() - now.getTime();
-                            if (diff <= 0) {
-                              return "⏰ Game locked";
-                            }
-                            return `⏰ Locks in: ${getCountdown(g.start_time)}`;
-                          }
-                        }
-                        
-                        // Monday games
-                        if (dayOfWeek === 1) {
-                          if (weekLockTime) {
-                            const diff = weekLockTime.getTime() - now.getTime();
-                            if (diff <= 0) {
-                              return "⏰ Week locked - all picks locked";
-                            }
-                            // Find the earliest Sunday 2:00 PM game for the message
-                            const earliestAfternoonGame = gamesByWeek[activeWeek]
-                              ?.filter(game => {
-                                const gt = new Date(game.start_time);
-                                return gt.getDay() === 0 && gt.getHours() >= 14;
-                              })
-                              ?.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())[0];
-                            
-                            if (earliestAfternoonGame) {
-                              return `⏰ Locks when ${earliestAfternoonGame.awayTeam} @ ${earliestAfternoonGame.homeTeam} starts: ${getCountdown(g.start_time)}`;
-                            }
-                            return `⏰ Locks when earliest Sunday 2 PM game starts: ${getCountdown(g.start_time)}`;
-                          } else {
-                            // If no Sunday 2:00 PM game in this week, lock individually
-                            const diff = gameTime.getTime() - now.getTime();
-                            if (diff <= 0) {
-                              return "⏰ Game locked";
-                            }
-                            return `⏰ Locks in: ${getCountdown(g.start_time)}`;
-                          }
-                        }
-                        
-                        // Default fallback
-                        const diff = gameTime.getTime() - now.getTime();
-                        if (diff <= 0) {
-                          return "⏰ Game locked";
-                        }
-                        return `⏰ Locks in: ${getCountdown(g.start_time)}`;
-                      })()}
+                      {getLockMessage(new Date(g.start_time), g.id)}
                     </div>
                   </div>
                 )}
