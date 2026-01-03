@@ -88,6 +88,13 @@ const AllPicksPage = () => {
   const [storingWinners, setStoringWinners] = useState(false);
   const [gamesByWeek, setGamesByWeek] = useState<Record<number, Game[]>>({});
 
+  // ADDED: State for fixed Week 18 data
+  const [fixedWeek18Data, setFixedWeek18Data] = useState<{
+    users: Profile[];
+    picksByUser: Record<string, Pick[]>;
+    games: Game[];
+  }>({ users: [], picksByUser: {}, games: [] });
+
   const SEASON_YEAR = 2025;
 
   // Update now every second for real-time countdown
@@ -312,6 +319,65 @@ const AllPicksPage = () => {
     return weekGames.length > 0 && weekGames.every(g => g.status === "Final");
   };
 
+  // Function to check stored winners
+  const checkStoredWinners = async (week: number) => {
+    if (!isAdmin) return;
+    
+    try {
+      const { data: existingWinners, error } = await supabase
+        .from('weekly_winners')
+        .select('*')
+        .eq('season', SEASON_YEAR)
+        .eq('week', week)
+        .order('is_paid_winner', { ascending: false });
+
+      if (error) {
+        console.error('Error checking stored winners:', error);
+        alert('Error checking stored winners');
+        return;
+      }
+
+      if (existingWinners && existingWinners.length > 0) {
+        const paidWinners = existingWinners.filter(w => w.is_paid_winner);
+        const unpaidWinners = existingWinners.filter(w => !w.is_paid_winner);
+        
+        let message = `Stored Winners for Week ${week}:\n\n`;
+        
+        if (paidWinners.length > 0) {
+          message += "🏆 PAID WINNERS:\n";
+          paidWinners.forEach((winner, index) => {
+            message += `${index + 1}. ${winner.player_name} - ${winner.correct_picks} correct`;
+            if (winner.tiebreaker !== null) message += ` (MNF diff: ${winner.tiebreaker})`;
+            if (winner.is_tied) message += ` [TIED]`;
+            message += '\n';
+          });
+          message += '\n';
+        }
+        
+        if (unpaidWinners.length > 0) {
+          message += "🥈 UNPAID WINNERS (Would Have Won):\n";
+          unpaidWinners.forEach((winner, index) => {
+            message += `${index + 1}. ${winner.player_name} - ${winner.correct_picks} correct`;
+            if (winner.tiebreaker !== null) message += ` (MNF diff: ${winner.tiebreaker})`;
+            if (winner.is_tied) message += ` [TIED]`;
+            message += '\n';
+          });
+        }
+        
+        if (paidWinners.length === 0 && unpaidWinners.length === 0) {
+          message = `No winners stored for Week ${week}`;
+        }
+        
+        alert(message);
+      } else {
+        alert(`No winners stored for Week ${week}`);
+      }
+    } catch (err) {
+      console.error('Error checking stored winners:', err);
+      alert('Error checking stored winners');
+    }
+  };
+
   // FIXED: Store weekly winners with proper validation
   const storeWeeklyWinners = async (week: number) => {
     try {
@@ -474,6 +540,100 @@ const AllPicksPage = () => {
       }
     } catch (err) {
       console.error('Error in cleanup:', err);
+    }
+  };
+
+  // ADDED: Get direct Week 18 data from database to fix the mismatch
+  const fetchDirectWeek18Data = async () => {
+    try {
+      console.log('📊 Fetching direct Week 18 data from database...');
+      
+      // Get all Week 18 games
+      const { data: week18GamesData, error: gamesError } = await supabase
+        .from('games')
+        .select('*')
+        .eq('week', 18);
+
+      if (gamesError) throw gamesError;
+
+      // Map games to our format
+      const mappedWeek18Games: Game[] = (week18GamesData || []).map((g: any) => {
+        const utcDate = new Date(g.start_time);
+        const mstDate = new Date(utcDate.getTime() - 7 * 60 * 60 * 1000);
+
+        return {
+          id: g.id,
+          week: g.week,
+          startTime: mstDate.toISOString(),
+          homeTeam: g.team_a,
+          awayTeam: g.team_b,
+          home_score: g.home_score,
+          away_score: g.away_score,
+          winner: g.winner,
+          status: g.status,
+          is_monday_night: g.is_monday_night,
+          actual_total_points: g.actual_total_points,
+        };
+      }).sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+
+      // Get all Week 18 picks with game and profile info using a single query with joins
+      const { data: week18PicksData, error: picksError } = await supabase
+        .from('game_picks')
+        .select(`
+          *,
+          games!inner(week, team_a, team_b),
+          profiles!inner(username, user_id, first_name, last_name, email, is_admin)
+        `)
+        .eq('games.week', 18);
+
+      if (picksError) throw picksError;
+
+      // Group picks by user
+      const picksByUser: Record<string, Pick[]> = {};
+      const week18Users: Profile[] = [];
+      const userProfilesMap: Record<string, Profile> = {};
+
+      week18PicksData?.forEach((pick: any) => {
+        const userId = pick.profiles.user_id;
+        
+        // Store user profile if not already stored
+        if (!userProfilesMap[userId]) {
+          userProfilesMap[userId] = {
+            user_id: pick.profiles.user_id,
+            username: pick.profiles.username,
+            first_name: pick.profiles.first_name,
+            last_name: pick.profiles.last_name,
+            email: pick.profiles.email,
+            is_admin: pick.profiles.is_admin
+          };
+          week18Users.push(userProfilesMap[userId]);
+        }
+        
+        // Add pick to user's picks
+        if (!picksByUser[userId]) {
+          picksByUser[userId] = [];
+        }
+        
+        picksByUser[userId].push({
+          user_id: pick.user_id,
+          game_id: pick.game_id,
+          selected_team: pick.selected_team,
+          lock_time: pick.lock_time,
+          total_points: pick.total_points
+        });
+      });
+
+      console.log(`✅ Fetched direct Week 18 data: ${week18Users.length} users, ${mappedWeek18Games.length} games`);
+      console.log(`👥 Week 18 users with picks:`, week18Users.map(u => u.username));
+
+      setFixedWeek18Data({
+        users: week18Users,
+        picksByUser,
+        games: mappedWeek18Games
+      });
+
+    } catch (err) {
+      console.error('Error fetching direct Week 18 data:', err);
     }
   };
 
@@ -968,6 +1128,9 @@ const AllPicksPage = () => {
           }
         }
         
+        // Fetch direct Week 18 data to fix the mismatch
+        setTimeout(() => fetchDirectWeek18Data(), 1000);
+        
         setLoading(false);
       } catch (err) {
         console.error("Error loading All Picks:", err);
@@ -999,18 +1162,45 @@ const AllPicksPage = () => {
     const stats: Record<string, UserStats> = {};
     const playersWithPicks: string[] = [];
     
-    profiles.forEach(profile => {
-      const userPicks = picks.filter(pick => pick.user_id === profile.user_id);
-      const weekGames = gamesByWeek[activeWeek] || [];
+    // Use fixed Week 18 data if available, otherwise use regular data
+    let weekGames: Game[] = [];
+    let userPicksMap: Record<string, Pick[]> = {};
+    let weekProfiles: Profile[] = [];
+
+    if (activeWeek === 18 && fixedWeek18Data.users.length > 0) {
+      // Use FIXED Week 18 data
+      weekGames = fixedWeek18Data.games;
+      userPicksMap = fixedWeek18Data.picksByUser;
+      weekProfiles = fixedWeek18Data.users;
+    } else {
+      // Use regular data for other weeks
+      weekGames = gamesByWeek[activeWeek] || [];
+      weekProfiles = profiles;
       
-      const picksForThisWeek = userPicks.filter(pick => 
-        weekGames.some(game => game.id === pick.game_id)
-      );
+      // Build user picks map for regular weeks
+      profiles.forEach(profile => {
+        userPicksMap[profile.user_id] = picks.filter(pick => pick.user_id === profile.user_id);
+      });
+    }
+    
+    weekProfiles.forEach(profile => {
+      const userPicks = userPicksMap[profile.user_id] || [];
       
-      const hasMadePicks = picksForThisWeek.length > 0;
-      
-      if (hasMadePicks) {
+      // For Week 18 with fixed data, we know they have picks
+      // For other weeks, check if they have picks
+      let hasMadePicks = false;
+      if (activeWeek === 18 && fixedWeek18Data.users.some(u => u.user_id === profile.user_id)) {
+        hasMadePicks = true;
         playersWithPicks.push(profile.user_id);
+      } else {
+        // For non-Week 18, use regular logic
+        const weekPicks = userPicks.filter(pick => 
+          weekGames.some(game => game.id === pick.game_id)
+        );
+        hasMadePicks = weekPicks.length > 0;
+        if (hasMadePicks) {
+          playersWithPicks.push(profile.user_id);
+        }
       }
 
       const totalGamesInWeek = weekGames.length;
@@ -1155,12 +1345,12 @@ const AllPicksPage = () => {
 
     console.log(`✅ FINAL RESULTS for week ${activeWeek}:`);
     console.log(`🏆 Paid Winners:`, paidWinners.map(id => {
-      const profile = profiles.find(p => p.user_id === id);
-      return `${profile?.username} (${stats[id]?.correctPicks} correct, MNF: ${stats[id]?.mondayNightDifference})`;
+      const user = weekProfiles.find(p => p.user_id === id);
+      return `${user?.username} (${stats[id]?.correctPicks} correct, MNF: ${stats[id]?.mondayNightDifference})`;
     }));
     console.log(`🥈 Unpaid Winners:`, unpaidWinners.map(id => {
-      const profile = profiles.find(p => p.user_id === id);
-      return `${profile?.username} (${stats[id]?.correctPicks} correct, MNF: ${stats[id]?.mondayNightDifference})`;
+      const user = weekProfiles.find(p => p.user_id === id);
+      return `${user?.username} (${stats[id]?.correctPicks} correct, MNF: ${stats[id]?.mondayNightDifference})`;
     }));
 
     setUserStats(stats);
@@ -1168,7 +1358,7 @@ const AllPicksPage = () => {
       paidMostCorrect: paidWinners,
       unpaidMostCorrect: unpaidWinners
     });
-  }, [games, picks, profiles, activeWeek, paidStatus, gamesByWeek]);
+  }, [games, picks, profiles, activeWeek, paidStatus, gamesByWeek, fixedWeek18Data]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -1181,14 +1371,63 @@ const AllPicksPage = () => {
     setActiveWeek(week);
   };
 
+  // ADDED: Get user picks for active week - USING FIXED DATA FOR WEEK 18
+  const getUserPicksForActiveWeek = (userId: string) => {
+    if (!activeWeek) return [];
+    
+    if (activeWeek === 18 && fixedWeek18Data.picksByUser[userId]) {
+      return fixedWeek18Data.picksByUser[userId];
+    }
+    
+    return picks.filter(pick => pick.user_id === userId);
+  };
+
+  // ADDED: Get games for active week - USING FIXED DATA FOR WEEK 18
+  const getActiveWeekGames = () => {
+    if (!activeWeek) return [];
+    
+    if (activeWeek === 18 && fixedWeek18Data.games.length > 0) {
+      return fixedWeek18Data.games;
+    }
+    
+    return gamesByWeek[activeWeek] || [];
+  };
+
   // Sort profiles - FIXED: Show ALL users who made picks
   const getSortedProfiles = () => {
+    // SPECIAL HANDLING FOR WEEK 18 - Use fixed data
+    if (activeWeek === 18 && fixedWeek18Data.users.length > 0) {
+      return fixedWeek18Data.users.sort((a, b) => {
+        const statsA = userStats[a.user_id] || { percentage: 0, correctPicks: 0 };
+        const statsB = userStats[b.user_id] || { percentage: 0, correctPicks: 0 };
+        
+        if (sortBy === 'percentage') {
+          if (sortOrder === 'desc') {
+            if (statsB.percentage !== statsA.percentage) {
+              return statsB.percentage - statsA.percentage;
+            }
+            return statsB.correctPicks - statsA.correctPicks;
+          } else {
+            if (statsA.percentage !== statsB.percentage) {
+              return statsA.percentage - statsB.percentage;
+            }
+            return statsA.correctPicks - statsB.correctPicks;
+          }
+        } else {
+          if (sortOrder === 'desc') {
+            return b.username.localeCompare(a.username);
+          } else {
+            return a.username.localeCompare(b.username);
+          }
+        }
+      });
+    }
+    
+    // For other weeks, use normal logic
     const usersWithPicks = profiles.filter(profile => {
       const stats = userStats[profile.user_id];
       return stats?.hasMadePicks || false;
     });
-
-    console.log(`👥 Showing ${usersWithPicks.length} users with picks for week ${activeWeek}`);
 
     return usersWithPicks.sort((a, b) => {
       const statsA = userStats[a.user_id] || { percentage: 0 };
@@ -1244,19 +1483,13 @@ const AllPicksPage = () => {
   const getCurrentWeekDisplay = () => {
     if (!activeWeek) return null;
     
-    const weekGames = gamesByWeek[activeWeek] || [];
+    const weekGames = getActiveWeekGames();
     const hasUpcomingGames = weekGames.some(game => new Date(game.startTime) > now);
     const hasLiveGames = weekGames.some(game => game.status === "InProgress");
 
     if (hasLiveGames) return `Week ${activeWeek} (Live)`;
     if (hasUpcomingGames) return `Week ${activeWeek} (Current)`;
     return `Week ${activeWeek} (Completed)`;
-  };
-
-  // Get games for active week with null safety
-  const getActiveWeekGames = () => {
-    if (!activeWeek || !gamesByWeek[activeWeek]) return [];
-    return gamesByWeek[activeWeek];
   };
 
   // Navigation items
@@ -1366,7 +1599,7 @@ const AllPicksPage = () => {
                 <div className="grid grid-cols-3 gap-3 text-center">
                   <div className="bg-blue-50 rounded-lg p-3">
                     <div className="text-xl font-bold text-blue-600">
-                      {activeWeek ? (gamesByWeek[activeWeek]?.length || 0) : 0}
+                      {activeWeek ? activeWeekGames.length : 0}
                     </div>
                     <div className="text-xs text-blue-800">Games</div>
                   </div>
@@ -1415,99 +1648,11 @@ const AllPicksPage = () => {
             <p className="text-sm text-blue-600 mt-1">
               Showing {sortedProfiles.length} players who made picks for this week
             </p>
-          </div>
-        )}
-
-        {/* Weekly Lock Indicator - ADDED */}
-        {activeWeek && (
-          <div className="mb-6 p-4 bg-blue-50 border-2 border-blue-300 rounded-lg max-w-2xl mx-auto">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <span className="text-2xl">⏰</span>
-                <div>
-                  <h3 className="font-bold text-blue-800">Week {activeWeek} Lock Rules</h3>
-                  <p className="text-sm text-blue-700">
-                    {(() => {
-                      const weekLockTime = getWeekLockTimeForCurrentWeek();
-                      if (weekLockTime) {
-                        // Get the earliest Sunday 2:00 PM game
-                        const earliestAfternoonGame = gamesByWeek[activeWeek]
-                          ?.filter(game => {
-                            const gameTime = new Date(game.startTime);
-                            return gameTime.getDay() === 0 && gameTime.getHours() >= 14;
-                          })
-                          ?.sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())[0];
-                        
-                        const earliestTime = earliestAfternoonGame ? formatTime(earliestAfternoonGame.startTime) : '';
-                        
-                        return (
-                          <>
-                            • Thursday/Friday/Saturday games: Lock individually<br/>
-                            • Sunday games before 2:00 PM MST: Lock individually<br/>
-                            • All Sunday games at or after 2:00 PM MST: Lock when {earliestAfternoonGame?.awayTeam} @ {earliestAfternoonGame?.homeTeam} starts ({earliestTime})<br/>
-                            • Monday Night Football: Locks when {earliestAfternoonGame?.awayTeam} @ {earliestAfternoonGame?.homeTeam} starts
-                          </>
-                        );
-                      } else {
-                        return (
-                          <>
-                            • Thursday/Friday/Saturday games: Lock individually<br/>
-                            • Sunday games: All lock individually<br/>
-                            • Monday Night Football: Locks individually
-                          </>
-                        );
-                      }
-                    })()}
-                  </p>
-                </div>
-              </div>
-              {(() => {
-                const weekLockTime = getWeekLockTimeForCurrentWeek();
-                
-                if (!weekLockTime) {
-                  // Check if all games are finished
-                  const weekGames = gamesByWeek[activeWeek] || [];
-                  const allGamesFinal = isWeekComplete();
-                  
-                  if (allGamesFinal) {
-                    return (
-                      <div className="bg-green-500 text-white px-4 py-2 rounded font-bold">
-                        WEEK COMPLETE
-                      </div>
-                    );
-                  }
-                  
-                  // No Sunday 2:00 PM games this week - all lock individually
-                  return (
-                    <div className="text-right">
-                      <div className="font-bold text-blue-800">Individual Locks</div>
-                      <div className="text-sm text-blue-700">All games lock individually</div>
-                    </div>
-                  );
-                }
-                
-                const diff = weekLockTime.getTime() - now.getTime();
-                if (diff <= 0) {
-                  return (
-                    <div className="bg-red-500 text-white px-4 py-2 rounded font-bold">
-                      WEEK LOCKED
-                    </div>
-                  );
-                }
-                
-                const hours = Math.floor(diff / (1000 * 60 * 60));
-                const mins = Math.floor((diff / (1000 * 60)) % 60);
-                const secs = Math.floor((diff / 1000) % 60);
-                return (
-                  <div className="text-right">
-                    <div className="font-bold text-blue-800">Earliest Sunday 2 PM:</div>
-                    <div className="text-lg font-bold text-blue-900">
-                      {hours}h {mins}m {secs}s
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
+            {activeWeek === 18 && (
+              <p className="text-xs text-green-600 mt-1">
+                ✅ Week 18 data fix applied - All users with picks are shown from database query
+              </p>
+            )}
           </div>
         )}
 
@@ -1531,41 +1676,6 @@ const AllPicksPage = () => {
                 className="bg-green-500 text-white px-4 py-2 rounded font-semibold hover:bg-green-600 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
               >
                 {storingWinners ? '💾 Storing...' : '💾 Store Winners for Week ' + activeWeek}
-              </button>
-              
-              <button
-                onClick={debugWeekDetection}
-                className="bg-gray-500 text-white px-4 py-2 rounded font-semibold hover:bg-gray-600 transition-colors"
-              >
-                🐛 Debug Week Detection
-              </button>
-              
-              <button
-                onClick={debugCurrentWeek}
-                className="bg-purple-500 text-white px-4 py-2 rounded font-semibold hover:bg-purple-600 transition-colors"
-              >
-                🔍 Debug Current Week
-              </button>
-              
-              <button
-                onClick={async () => {
-                  const { data: existingWinners } = await supabase
-                    .from('weekly_winners')
-                    .select('*')
-                    .eq('season', SEASON_YEAR)
-                    .eq('week', activeWeek);
-                  
-                  if (existingWinners && existingWinners.length > 0) {
-                    alert(`Winners for Week ${activeWeek}:\n${existingWinners.map(w => 
-                      `${w.player_name} (${w.is_paid_winner ? 'Paid' : 'Unpaid'}) - ${w.correct_picks} correct${w.is_tied ? ' - Tied' : ''}`
-                    ).join('\n')}`);
-                  } else {
-                    alert(`No winners stored yet for Week ${activeWeek}`);
-                  }
-                }}
-                className="bg-blue-500 text-white px-4 py-2 rounded font-semibold hover:bg-blue-600 transition-colors"
-              >
-                👀 View Stored Winners
               </button>
               
               <div className="text-sm text-yellow-700">
@@ -1898,8 +2008,8 @@ const AllPicksPage = () => {
                         {/* Game picks - Scroll horizontally */}
                         {activeWeekGames.map((game: Game) => {
                           const locked = isLocked(game.startTime);
-                          const userPick = picks.find(
-                            (p) => p.user_id === user.user_id && p.game_id === game.id
+                          const userPick = getUserPicksForActiveWeek(user.user_id).find(
+                            (p) => p.game_id === game.id
                           );
                           
                           const showPick = locked;
@@ -1965,81 +2075,129 @@ const AllPicksPage = () => {
           </div>
         )}
 
-        {/* Legend */}
+        {/* Enhanced Legend/How It Works Section */}
         <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-          <h3 className="font-semibold text-blue-900 mb-3 text-lg">How it works:</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
-            <div className="flex items-center gap-3">
-              <span className="inline-block w-4 h-4 rounded-full bg-green-500 border border-green-600"></span>
-              <span className="text-gray-800 font-medium">Pick available (game hasn't started) - Hover for countdown</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="inline-block w-4 h-4 rounded-full bg-red-600 border border-red-700"></span>
-              <span className="text-gray-800 font-medium">Pick locked (game started) - Hover for details</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-green-600 text-xl">✓</span>
-              <span className="text-gray-800 font-medium">Paid</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-red-500 text-xl">✗</span>
-              <span className="text-gray-800 font-medium">Not paid</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="bg-green-100 text-green-900 px-2 py-1 rounded border border-green-300 font-medium">🏆</span>
-              <span className="text-gray-800 font-medium">Most correct picks (Paid winners - Green)</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="bg-orange-100 text-orange-900 px-2 py-1 rounded border border-orange-300 font-medium">🥈</span>
-              <span className="text-gray-800 font-medium">Would have won (Unpaid winners - Orange)</span>
-            </div>
-            {isAdmin && (
-              <div className="flex items-center gap-3">
-                <span className="bg-yellow-100 text-yellow-900 px-2 py-1 rounded border border-yellow-300 font-medium">Click</span>
-                <span className="text-gray-800 font-medium">Admin: Click paid status to edit</span>
+          <h3 className="font-semibold text-blue-900 mb-3 text-lg">📖 How It Works - Pick Tracking System</h3>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+            {/* Game Status Section */}
+            <div className="bg-white p-3 rounded border">
+              <h4 className="font-bold text-gray-800 mb-2">🎮 Game Status</h4>
+              <div className="space-y-2 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="inline-block w-4 h-4 rounded-full bg-green-500 border border-green-600"></span>
+                  <span>Game hasn't started - Pick still open</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="inline-block w-4 h-4 rounded-full bg-red-600 border border-red-700"></span>
+                  <span>Game started - Pick locked</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-600 text-xl">❓</span>
+                  <span>Pick hidden until game starts</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="bg-green-100 text-green-900 px-2 py-1 rounded border">Team</span>
+                  <span>Correct pick (green background)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="bg-red-100 text-red-900 px-2 py-1 rounded border">Team</span>
+                  <span>Incorrect pick (red background)</span>
+                </div>
               </div>
-            )}
-            <div className="flex items-center gap-3">
-              <span className="text-gray-600 text-xl">❓</span>
-              <span className="text-gray-800 font-medium">Pick hidden until game starts</span>
             </div>
-            <div className="flex items-center gap-3">
-              <span className="bg-green-100 text-green-900 px-2 py-1 rounded border border-green-300 font-medium">Team</span>
-              <span className="text-gray-800 font-medium">Pick made</span>
+            
+            {/* Player Status Section */}
+            <div className="bg-white p-3 rounded border">
+              <h4 className="font-bold text-gray-800 mb-2">👥 Player Status</h4>
+              <div className="space-y-2 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="text-green-600 text-xl">✓</span>
+                  <span>Player has paid for this week</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-red-500 text-xl">✗</span>
+                  <span>Player hasn't paid for this week</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="bg-green-100 text-green-900 px-2 py-1 rounded border">🏆</span>
+                  <span>Most correct picks (Paid winner)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="bg-orange-100 text-orange-900 px-2 py-1 rounded border">🥈</span>
+                  <span>Would have won (Unpaid winner)</span>
+                </div>
+                {isAdmin && (
+                  <div className="flex items-center gap-2">
+                    <span className="bg-yellow-100 text-yellow-900 px-2 py-1 rounded border">Click</span>
+                    <span>Admin: Click paid status to edit</span>
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="flex items-center gap-3">
-              <span className="bg-purple-100 text-purple-900 px-2 py-1 rounded border border-purple-300 font-medium">MNF</span>
-              <span className="text-gray-800 font-medium">Monday Night Football</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-purple-600 text-xs">Total: XX</span>
-              <span className="text-gray-800 font-medium">Monday night total (shown when final)</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-blue-600 font-medium">Hover/Click Game</span>
-              <span className="text-gray-800 font-medium">See game time and lock rules</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-blue-600 font-medium">Hover/Click Name</span>
-              <span className="text-gray-800 font-medium">See user's first and last name</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-blue-600 font-medium">Hover Lock Indicator</span>
-              <span className="text-gray-800 font-medium">See countdown or lock status</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-blue-600 font-medium">Weekly Lock Rules</span>
-              <span className="text-gray-800 font-medium">See when games lock based on Sunday 2 PM rule</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="bg-red-500 text-white px-2 py-1 rounded text-xs font-medium">WEEK LOCKED</span>
-              <span className="text-gray-800 font-medium">All Sunday 2 PM+ & Monday games locked</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="bg-green-500 text-white px-2 py-1 rounded text-xs font-medium">WEEK COMPLETE</span>
-              <span className="text-gray-800 font-medium">All games finished for the week</span>
+            
+            {/* MNF Section */}
+            <div className="bg-white p-3 rounded border">
+              <h4 className="font-bold text-gray-800 mb-2">🌙 Monday Night Football</h4>
+              <div className="space-y-2 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="bg-purple-100 text-purple-900 px-2 py-1 rounded border">MNF</span>
+                  <span>Monday Night Football game</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-purple-600 text-xs">Total: XX</span>
+                  <span>Predicted total points (shown when final)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-purple-600">Diff: XX</span>
+                  <span>Difference between prediction and actual</span>
+                </div>
+              </div>
             </div>
           </div>
+          
+          {/* Week Lock Rules */}
+          <div className="bg-white p-3 rounded border mb-4">
+            <h4 className="font-bold text-gray-800 mb-2">⏰ Weekly Lock Rules</h4>
+            <div className="text-sm space-y-1">
+              <p><strong>Thursday/Friday/Saturday games:</strong> Lock at their individual start times</p>
+              <p><strong>Sunday games BEFORE 2:00 PM MST:</strong> Lock at their individual start times</p>
+              <p><strong>Sunday games AT/AFTER 2:00 PM MST:</strong> All lock when the earliest Sunday 2:00 PM game starts</p>
+              <p><strong>Monday Night Football:</strong> Locks when the earliest Sunday 2:00 PM game starts</p>
+              <p className="text-xs text-gray-600 mt-2">Hover over game headers or lock indicators for specific countdowns</p>
+            </div>
+          </div>
+          
+          {/* Interactive Features */}
+          <div className="bg-white p-3 rounded border">
+            <h4 className="font-bold text-gray-800 mb-2">🖱️ Interactive Features</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+              <div>
+                <p><strong>Hover/Click Game Headers:</strong> See game time and lock rules</p>
+                <p><strong>Hover/Click Player Names:</strong> See user's full name and email</p>
+              </div>
+              <div>
+                <p><strong>Hover Lock Indicators:</strong> See countdown or lock status</p>
+                <p><strong>Click Week Tabs:</strong> Switch between different weeks</p>
+                <p><strong>Sort by Name/Percentage:</strong> Click column headers to sort</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Admin Section (only shown to admins) */}
+          {isAdmin && (
+            <div className="bg-yellow-50 p-3 rounded border mt-4">
+              <h4 className="font-bold text-yellow-800 mb-2">🔧 Admin Features</h4>
+              <div className="text-sm space-y-1">
+                <p><strong>Mark Players Paid/Unpaid:</strong> Click the ✓ or ✗ in the Paid column</p>
+                <p><strong>Store Weekly Winners:</strong> Click the "Store Winners" button after MNF is final</p>
+                <p><strong>Check Stored Winners:</strong> View winners already saved in database</p>
+                <p><strong>Clear Stored Winners:</strong> Remove winners if incorrect (use with caution)</p>
+                <p><strong>Debug Tools:</strong> Use debug buttons to troubleshoot week detection</p>
+                <p className="text-xs text-yellow-600 mt-2">Note: Admin features are only visible to users with admin privileges</p>
+              </div>
+            </div>
+          )}
         </div>
       </main>
     </div>
