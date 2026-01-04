@@ -23,6 +23,11 @@ export default function ProfilePage() {
     totalLosses: 0
   });
 
+  // Admin score update states
+  const [updatingScores, setUpdatingScores] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState("");
+  const [updateError, setUpdateError] = useState("");
+
   // Navigation items
   const navItems = [
     { href: "/", label: "Home", icon: "🏠" },
@@ -179,6 +184,46 @@ export default function ProfilePage() {
     return userEmail?.charAt(0).toUpperCase() || "U";
   };
 
+  // Admin: Update NFL Scores Function
+  const handleUpdateScores = async () => {
+    if (!isAdmin) {
+      setUpdateError("Access denied: Admin privileges required");
+      return;
+    }
+
+    setUpdatingScores(true);
+    setUpdateMessage("");
+    setUpdateError("");
+
+    try {
+      const response = await fetch("/api/update-scores", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Failed to update scores");
+      }
+
+      setUpdateMessage(result.message || "Scores updated successfully!");
+      
+      // Refresh stats or show success message
+      setTimeout(() => {
+        setUpdateMessage("");
+        // You might want to refresh page data here
+      }, 3000);
+
+    } catch (err: any) {
+      setUpdateError(err.message || "An error occurred while updating scores");
+    } finally {
+      setUpdatingScores(false);
+    }
+  };
+
   if (loading && !profile) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -286,11 +331,44 @@ export default function ProfilePage() {
               </div>
 
               {isAdmin && (
-                <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <span className="text-yellow-600">🔧</span>
-                    <span className="text-sm font-semibold text-yellow-800">Admin Mode Active</span>
+                <div className="mt-4 space-y-3">
+                  <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <span className="text-yellow-600">🔧</span>
+                      <span className="text-sm font-semibold text-yellow-800">Admin Mode Active</span>
+                    </div>
                   </div>
+                  
+                  {/* Admin Action Button in Header Menu */}
+                  <button
+                    onClick={handleUpdateScores}
+                    disabled={updatingScores}
+                    className="w-full bg-green-500 text-white px-4 py-3 rounded-lg font-medium hover:bg-green-600 transition-colors disabled:bg-green-400 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {updatingScores ? (
+                      <>
+                        <span className="animate-spin">⏳</span>
+                        Updating Scores...
+                      </>
+                    ) : (
+                      <>
+                        <span>🏈</span>
+                        Update NFL Scores
+                      </>
+                    )}
+                  </button>
+                  
+                  {updateMessage && (
+                    <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                      <p className="text-sm text-green-700 font-medium">{updateMessage}</p>
+                    </div>
+                  )}
+                  
+                  {updateError && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                      <p className="text-sm text-red-700 font-medium">{updateError}</p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -486,6 +564,73 @@ export default function ProfilePage() {
                 </div>
               )}
             </div>
+
+            {/* Admin Section - Only visible to admins */}
+            {isAdmin && (
+              <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl shadow-sm p-8">
+                <h2 className="text-2xl font-bold text-yellow-800 mb-4 flex items-center gap-2">
+                  <span>🔧</span> Admin Controls
+                </h2>
+                
+                <div className="space-y-4">
+                  <div className="mb-4">
+                    <h3 className="text-lg font-semibold text-yellow-700 mb-2">Update NFL Scores</h3>
+                    <p className="text-yellow-600 mb-4">
+                      This will fetch the latest NFL scores from ESPN and update the database.
+                      Only use this when games are complete or scores need to be refreshed.
+                    </p>
+                    
+                    <div className="space-y-3">
+                      <button
+                        onClick={handleUpdateScores}
+                        disabled={updatingScores}
+                        className="w-full bg-green-500 text-white px-6 py-3 rounded-lg font-medium hover:bg-green-600 transition-colors disabled:bg-green-400 disabled:cursor-not-allowed flex items-center justify-center gap-3"
+                      >
+                        {updatingScores ? (
+                          <>
+                            <span className="animate-spin">⏳</span>
+                            Updating NFL Scores...
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-xl">🏈</span>
+                            Update NFL Scores Now
+                          </>
+                        )}
+                      </button>
+                      
+                      {updateMessage && (
+                        <div className="p-4 bg-green-100 border border-green-300 rounded-lg">
+                          <div className="flex items-center gap-2">
+                            <span className="text-green-600">✅</span>
+                            <p className="text-green-800 font-medium">{updateMessage}</p>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {updateError && (
+                        <div className="p-4 bg-red-100 border border-red-300 rounded-lg">
+                          <div className="flex items-center gap-2">
+                            <span className="text-red-600">❌</span>
+                            <p className="text-red-800 font-medium">{updateError}</p>
+                          </div>
+                        </div>
+                      )}
+                      
+                      <div className="text-sm text-yellow-700 p-3 bg-yellow-100 rounded-lg">
+                        <p className="font-semibold mb-1">Note:</p>
+                        <ul className="list-disc pl-5 space-y-1">
+                          <li>Updates scores for the current week automatically</li>
+                          <li>Also updates Monday Night Football total points if game is final</li>
+                          <li>This process may take a few seconds</li>
+                          <li>Games will be marked as "Final" when scores are updated</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Right Column - Additional Features */}
@@ -512,6 +657,16 @@ export default function ProfilePage() {
                 >
                   Check Standings
                 </button>
+                
+                {/* Admin-specific quick action */}
+                {isAdmin && (
+                  <button 
+                    onClick={() => router.push('/profiles')}
+                    className="w-full bg-yellow-500 text-white py-3 rounded-lg font-medium hover:bg-yellow-600 transition-colors text-center"
+                  >
+                    View All Profiles
+                  </button>
+                )}
               </div>
             </div>
 
@@ -556,6 +711,18 @@ export default function ProfilePage() {
               <p className="text-green-600 text-sm">
                 Your account is in good standing. All features are available.
               </p>
+              
+              {isAdmin && (
+                <div className="mt-4 p-3 bg-yellow-100 border border-yellow-300 rounded-lg">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-yellow-700">🔧</span>
+                    <span className="text-sm font-semibold text-yellow-800">Administrator Privileges</span>
+                  </div>
+                  <p className="text-xs text-yellow-700">
+                    You have access to admin features including score updates and user management.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         </div>
