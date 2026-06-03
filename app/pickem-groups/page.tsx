@@ -34,10 +34,8 @@ type GroupMember = {
 export default function PickemGroupsPage() {
   const router = useRouter();
 
-  const [headerExpanded, setHeaderExpanded] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [seasonYear, setSeasonYear] = useState(2026);
   const [loading, setLoading] = useState(true);
 
@@ -83,14 +81,6 @@ export default function PickemGroupsPage() {
 
       setUserId(user.id);
       setUserEmail(user.email || null);
-
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("is_admin")
-        .eq("user_id", user.id)
-        .single();
-
-      setIsAdmin(profile?.is_admin || false);
 
       const { data: config } = await supabase
         .from("season_config")
@@ -149,62 +139,57 @@ export default function PickemGroupsPage() {
     }
   };
 
-  const fetchMembers = async (groupId: string) => {
-    const { data: memberData, error: memberError } = await supabase
-      .from("group_members")
-      .select(`
-        id,
-        group_id,
-        user_id,
-        role,
-        status,
-        is_paid,
-        paid_at
-      `)
-      .eq("group_id", groupId)
-      .order("created_at", { ascending: true });
+ const fetchMembers = async (groupId: string) => {
+  const { data: memberData, error: memberError } = await supabase
+    .from("group_members")
+    .select(`
+      id,
+      group_id,
+      user_id,
+      role,
+      status,
+      is_paid,
+      paid_at
+    `)
+    .eq("group_id", groupId)
+    .order("created_at", { ascending: true });
 
-    if (memberError) throw memberError;
+  if (memberError) throw memberError;
 
-    const userIds = (memberData || []).map((member) => member.user_id);
+  const userIds = (memberData || []).map((member) => member.user_id);
 
-    if (userIds.length === 0) {
-      setMembers([]);
-      return;
-    }
+  const { data: profileData, error: profileError } = await supabase
+    .from("profiles")
+    .select("user_id, username, first_name, last_name, email")
+    .in("user_id", userIds);
 
-    const { data: profileData, error: profileError } = await supabase
-      .from("profiles")
-      .select("user_id, username, first_name, last_name, email")
-      .in("user_id", userIds);
+  if (profileError) throw profileError;
 
-    if (profileError) throw profileError;
+  const membersWithProfiles = (memberData || []).map((member) => {
+    const profile = profileData?.find(
+      (profile) => profile.user_id === member.user_id
+    );
 
-    const membersWithProfiles = (memberData || []).map((member) => {
-      const profile = profileData?.find(
-        (profile) => profile.user_id === member.user_id
-      );
+    return {
+      ...member,
+      profiles: profile ? [profile] : [],
+    };
+  });
 
-      return {
-        ...member,
-        profiles: profile ? [profile] : [],
-      };
-    });
+  setMembers(membersWithProfiles as GroupMember[]);
+};
 
-    setMembers(membersWithProfiles as GroupMember[]);
-  };
+    const createGroup = async () => {
+      try {
+        setMessage("");
+        setError("");
 
-  const createGroup = async () => {
-    try {
-      setMessage("");
-      setError("");
+        if (!userId) return;
 
-      if (!userId) return;
-
-      if (groupName.trim().length < 3) {
-        setError("Group name must be at least 3 characters.");
-        return;
-      }
+        if (groupName.trim().length < 3) {
+          setError("Group name must be at least 3 characters.");
+          return;
+        }
 
       const inviteCode = makeInviteCode();
 
@@ -293,9 +278,7 @@ export default function PickemGroupsPage() {
 
       setJoinCode("");
       setSelectedGroup(group);
-      setMessage(
-        `Request sent to join ${group.name}. Waiting for owner approval.`
-      );
+      setMessage(`Request sent to join ${group.name}. Waiting for owner approval.`);
 
       await fetchMyGroups(userId, seasonYear);
       await fetchMembers(group.id);
@@ -383,23 +366,17 @@ export default function PickemGroupsPage() {
   const getDisplayName = (member: GroupMember) => {
     const profile = member.profiles?.[0];
 
-    if (!profile) return "Unknown Player";
+    if (!profile) return member.user_id;
 
-    const fullName =
-      `${profile.first_name ?? ""} ${profile.last_name ?? ""}`.trim();
+    if (profile.first_name || profile.last_name) {
+      return `${profile.first_name || ""} ${profile.last_name || ""}`.trim();
+    }
 
-    if (fullName) return fullName;
-
-    return profile.username || profile.email || "Unknown Player";
+    return profile.username || profile.email;
   };
 
   const getApprovedMembers = () => {
     return members.filter((member) => member.status === "approved");
-  };
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.push("/login");
   };
 
   const isOwner = selectedGroup?.owner_user_id === userId;
@@ -418,140 +395,45 @@ export default function PickemGroupsPage() {
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
         <div className="flex items-center justify-between p-4">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setHeaderExpanded(!headerExpanded)}
-              className="p-2 rounded-lg hover:bg-gray-200 transition-colors flex items-center gap-2 bg-gray-100 border border-gray-300"
-            >
-              <span className="text-xl text-gray-800">
-                {headerExpanded ? "✕" : "☰"}
-              </span>
-              <span className="font-semibold text-gray-800 hidden sm:block">
-                {headerExpanded ? "Close Menu" : "Menu"}
-              </span>
-            </button>
-
-            <h1 className="text-2xl font-bold text-gray-800">NFL Picks</h1>
-          </div>
+          <h1 className="text-2xl font-bold text-gray-800">Pick'em Groups</h1>
 
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold">
-                {userEmail?.charAt(0).toUpperCase() || "U"}
-              </div>
-
-              <div className="hidden md:block text-right">
-                <p className="text-sm font-medium text-gray-700">
-                  {userEmail || "User"}
-                </p>
-                <p className="text-xs text-gray-500">
-                  {isAdmin ? "Admin" : "User"}
-                </p>
-              </div>
+            <div className="hidden md:block text-right">
+              <p className="text-sm font-medium text-gray-700">{userEmail}</p>
+              <p className="text-xs text-gray-500">Season {seasonYear}</p>
             </div>
 
             <button
-              onClick={handleLogout}
-              className="bg-red-500 text-white px-3 py-2 rounded text-sm font-medium hover:bg-red-600 transition-colors"
+              onClick={() => router.push("/profile")}
+              className="bg-blue-500 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-600"
             >
-              Logout
+              Profile
             </button>
           </div>
         </div>
 
-        {headerExpanded && (
-          <div className="absolute top-full left-0 w-80 bg-white border-b border-r border-gray-200 shadow-lg z-40">
-            <div className="p-6">
-              <div className="mb-6">
-                <h2 className="text-xl font-bold text-gray-800 mb-2">
-                  Navigation
-                </h2>
-                <p className="text-sm text-gray-600">
-                  Quick access to all features
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 gap-3">
-                {navItems.map((item) => (
-                  <a
-                    key={item.href}
-                    href={item.href}
-                    className={`flex items-center gap-4 p-4 rounded-lg transition-all duration-200 group border ${
-                      item.href === "/pickem-groups"
-                        ? "bg-blue-50 text-blue-700 border-blue-300"
-                        : "bg-gray-50 hover:bg-blue-50 hover:text-blue-700 border-gray-200 hover:border-blue-200"
-                    }`}
-                    onClick={() => setHeaderExpanded(false)}
-                  >
-                    <span className="text-2xl group-hover:scale-110 transition-transform">
-                      {item.icon}
-                    </span>
-
-                    <div className="flex-1">
-                      <div className="font-semibold text-gray-800 group-hover:text-blue-800">
-                        {item.label}
-                      </div>
-                      <div className="text-xs text-gray-500 group-hover:text-blue-600 mt-1">
-                        Click to navigate
-                      </div>
-                    </div>
-
-                    <span className="text-gray-400 group-hover:text-blue-500 transition-colors">
-                      →
-                    </span>
-                  </a>
-                ))}
-              </div>
-
-              <div className="mt-6 pt-6 border-t border-gray-200">
-                <h3 className="font-semibold text-gray-800 mb-3">
-                  Group Stats
-                </h3>
-                <div className="grid grid-cols-3 gap-3 text-center">
-                  <div className="bg-blue-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-blue-600">
-                      {myGroups.length}
-                    </div>
-                    <div className="text-xs text-blue-800">Groups</div>
-                  </div>
-
-                  <div className="bg-green-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-green-600">
-                      {approvedMembers.length}
-                    </div>
-                    <div className="text-xs text-green-800">Approved</div>
-                  </div>
-
-                  <div className="bg-purple-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-purple-600">
-                      {seasonYear}
-                    </div>
-                    <div className="text-xs text-purple-800">Season</div>
-                  </div>
-                </div>
-              </div>
-
-              {isAdmin && (
-                <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <span className="text-yellow-600">🔧</span>
-                    <span className="text-sm font-semibold text-yellow-800">
-                      Admin Mode Active
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+        <div className="px-4 pb-4 flex gap-2 overflow-x-auto">
+          {navItems.map((item) => (
+            <button
+              key={item.href}
+              onClick={() => router.push(item.href)}
+              className={`px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${
+                item.href === "/pickem-groups"
+                  ? "bg-blue-600 text-white"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+              }`}
+            >
+              {item.icon} {item.label}
+            </button>
+          ))}
+        </div>
       </header>
 
       <main className="p-6 max-w-6xl mx-auto">
         <div className="text-center mb-8">
           <h2 className="text-4xl font-bold text-gray-800 mb-3">Groups</h2>
           <p className="text-gray-600 text-lg">
-            Create a private pick&apos;em group, invite players, approve
-            requests, and track payments.
+            Create a private pick'em group, invite players, approve requests, and track payments.
           </p>
         </div>
 
@@ -818,8 +700,7 @@ export default function PickemGroupsPage() {
 
                 {!isOwner && (
                   <p className="text-sm text-gray-500 mt-4">
-                    Only the group owner can approve members and change paid
-                    status.
+                    Only the group owner can approve members and change paid status.
                   </p>
                 )}
               </>

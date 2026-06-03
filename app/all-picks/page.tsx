@@ -95,7 +95,7 @@ const AllPicksPage = () => {
     games: Game[];
   }>({ users: [], picksByUser: {}, games: [] });
 
-  const SEASON_YEAR = 2025;
+  const [seasonYear, setSeasonYear] = useState(2026);
 
   // Update now every second for real-time countdown
   useEffect(() => {
@@ -327,7 +327,7 @@ const AllPicksPage = () => {
       const { data: existingWinners, error } = await supabase
         .from('weekly_winners')
         .select('*')
-        .eq('season', SEASON_YEAR)
+        .eq('season', seasonYear)
         .eq('week', week)
         .order('is_paid_winner', { ascending: false });
 
@@ -400,7 +400,7 @@ const AllPicksPage = () => {
       const { data: existingWinners, error: checkError } = await supabase
         .from('weekly_winners')
         .select('*')
-        .eq('season', SEASON_YEAR)
+        .eq('season', seasonYear)
         .eq('week', week);
 
       if (checkError) {
@@ -427,7 +427,7 @@ const AllPicksPage = () => {
         
         if (userProfile && stats) {
           winnersData.push({
-            season: SEASON_YEAR,
+            season: seasonYear,
             week: week,
             player_name: userProfile.username,
             correct_picks: stats.correctPicks,
@@ -446,7 +446,7 @@ const AllPicksPage = () => {
         
         if (userProfile && stats) {
           winnersData.push({
-            season: SEASON_YEAR,
+            season: seasonYear,
             week: week,
             player_name: userProfile.username,
             correct_picks: stats.correctPicks,
@@ -494,7 +494,7 @@ const AllPicksPage = () => {
       const { data: allWinners, error: fetchError } = await supabase
         .from('weekly_winners')
         .select('*')
-        .eq('season', SEASON_YEAR);
+        .eq('season', seasonYear);
 
       if (fetchError) {
         console.error('Error fetching winners for cleanup:', fetchError);
@@ -559,12 +559,11 @@ const AllPicksPage = () => {
       // Map games to our format
       const mappedWeek18Games: Game[] = (week18GamesData || []).map((g: any) => {
         const utcDate = new Date(g.start_time);
-        const mstDate = new Date(utcDate.getTime() - 7 * 60 * 60 * 1000);
 
         return {
           id: g.id,
           week: g.week,
-          startTime: mstDate.toISOString(),
+          startTime: g.start_time,
           homeTeam: g.team_a,
           awayTeam: g.team_b,
           home_score: g.home_score,
@@ -668,7 +667,7 @@ const AllPicksPage = () => {
           const { data: existingWinners, error } = await supabase
             .from('weekly_winners')
             .select('*')
-            .eq('season', SEASON_YEAR)
+            .eq('season', seasonYear)
             .eq('week', week);
 
           if (error) {
@@ -787,7 +786,7 @@ const AllPicksPage = () => {
       .from('weekly_payments')
       .select('user_id, is_paid')
       .eq('week_number', week)
-      .eq('season_year', SEASON_YEAR);
+      .eq("seasonYear", seasonYear)
 
     paidData?.forEach(payment => {
       paidStatusForWeek[payment.user_id] = payment.is_paid || false;
@@ -901,7 +900,7 @@ const AllPicksPage = () => {
     const { data: allWinners } = await supabase
       .from('weekly_winners')
       .select('*')
-      .eq('season', SEASON_YEAR)
+      .eq('season', seasonYear)
       .order('week');
     
     console.log("Existing winners in DB:", allWinners);
@@ -950,7 +949,7 @@ const AllPicksPage = () => {
         .from('weekly_payments')
         .select('user_id, is_paid')
         .eq('week_number', activeWeek)
-        .eq('season_year', SEASON_YEAR);
+        .eq('season_year', seasonYear);
 
       if (error) {
         console.error('Error fetching paid status:', error);
@@ -988,7 +987,7 @@ const AllPicksPage = () => {
         .upsert({
           user_id: userId,
           week_number: activeWeek,
-          season_year: SEASON_YEAR,
+          season_year: seasonYear,
           is_paid: newStatus,
           paid_at: newStatus ? new Date().toISOString() : null,
           updated_at: new Date().toISOString()
@@ -1016,6 +1015,17 @@ const AllPicksPage = () => {
     const fetchData = async () => {
       try {
         // Get current user
+
+        // Get current season from config
+        const { data: config } = await supabase
+          .from("season_config")
+          .select("season_year")
+          .single();
+
+        const activeSeason = config?.season_year ?? 2026;
+
+        setSeasonYear(activeSeason);
+
         const { data: { user } } = await supabase.auth.getUser();
         setCurrentUser(user);
         setUserEmail(user?.email || null);
@@ -1030,8 +1040,11 @@ const AllPicksPage = () => {
           setIsAdmin(currentUserProfile?.is_admin || false);
         }
 
-        const { data: gameData } = await supabase.from("games").select("*");
-        
+        const { data: gameData } = await supabase
+          .from("games")
+          .select("*")
+          .eq("season", activeSeason);
+                
         const filteredGameData = (gameData || []).filter((g: any) => 
           g.team_a && g.team_b && 
           g.team_a.trim() !== '' && g.team_b.trim() !== '' &&
@@ -1040,12 +1053,11 @@ const AllPicksPage = () => {
 
         const mappedGames: Game[] = filteredGameData.map((g: any) => {
           const utcDate = new Date(g.start_time);
-          const mstDate = new Date(utcDate.getTime() - 7 * 60 * 60 * 1000);
 
           return {
             id: g.id,
             week: g.week,
-            startTime: mstDate.toISOString(),
+            startTime: g.start_time,
             homeTeam: g.team_a,
             awayTeam: g.team_b,
             home_score: g.home_score,
@@ -1495,9 +1507,10 @@ const AllPicksPage = () => {
   // Navigation items
   const navItems = [
     { href: "/", label: "Home", icon: "🏠" },
-    { href: "/make-picks", label: "Make Picks", icon: "🏈" },
+    { href: "/all-picks", label: "View All Picks", icon: "📊" },
     { href: "/pick-summary", label: "Pick Percentages", icon: "📈" },
     { href: "/standings", label: "Standings", icon: "🏆" },
+    { href: "/pickem-groups", label: "Pick'em Groups", icon: "👥" },
     { href: "/rules", label: "Rules", icon: "📋" },
     { href: "/profile", label: "Profile", icon: "👤" },
   ];

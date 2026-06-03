@@ -3,9 +3,24 @@ import { supabase } from "@/lib/supabaseClient";
 
 export async function GET(req: NextRequest) {
   try {
+    // Get current season from season_config
+    const { data: config, error: configError } = await supabase
+      .from("season_config")
+      .select("season_year")
+      .single();
+
+    if (configError) {
+      console.error("Error fetching season config:", configError.message);
+      return NextResponse.json({ error: configError.message }, { status: 500 });
+    }
+
+    const seasonYear = config?.season_year ?? 2026;
+
+    // Only pull games for current season
     const { data, error } = await supabase
       .from("games")
       .select("*")
+      .eq("season", seasonYear)
       .order("start_time", { ascending: true });
 
     if (error) {
@@ -30,34 +45,33 @@ export async function GET(req: NextRequest) {
       }[]
     > = {};
 
-    // Current time in Mountain Time
-    const nowMST = new Date(
-      new Date().toLocaleString("en-US", { timeZone: "America/Denver" })
-    );
+    const now = new Date();
 
     data.forEach((game) => {
       const weekKey = `Week ${game.week}`;
       if (!weeks[weekKey]) weeks[weekKey] = [];
 
-      // Convert UTC to MST
-      const mstTime = new Date(
-        new Date(game.start_time).toLocaleString("en-US", {
-          timeZone: "America/Denver",
-        })
-      );
+      const gameTime = new Date(game.start_time);
 
       let status = game.status;
+
       if (!status) {
         if (game.home_score != null && game.away_score != null) {
           status = "Final";
-          game.winner =
-            game.home_score > game.away_score ? game.team_a : game.team_b;
-        } else if (mstTime <= nowMST) {
+        } else if (gameTime <= now) {
           status = "InProgress";
         } else {
           status = "Scheduled";
         }
       }
+
+      const winner =
+        game.winner ??
+        (game.home_score != null && game.away_score != null
+          ? game.home_score > game.away_score
+            ? game.team_a
+            : game.team_b
+          : null);
 
       weeks[weekKey].push({
         id: game.id,
@@ -65,14 +79,13 @@ export async function GET(req: NextRequest) {
         awayTeam: game.team_b,
         home_score: game.home_score,
         away_score: game.away_score,
-        winner: game.winner,
+        winner,
         status,
-        date: mstTime.toISOString(), // send MST time to frontend
+        date: game.start_time,
         week: game.week,
       });
     });
 
-    // Sort by MST
     Object.keys(weeks).forEach((week) => {
       weeks[week].sort(
         (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()

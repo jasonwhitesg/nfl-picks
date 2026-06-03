@@ -141,9 +141,22 @@ const MakePicksPage = () => {
   const fetchGames = async (forceRefresh = false) => {
     addDebugInfo(`Fetching games from database... ${forceRefresh ? '(FORCED)' : ''}`);
     
+    // Get current season so ESPN 2026 games do not mix with old 2025 games
+    const { data: config, error: configError } = await supabase
+      .from("season_config")
+      .select("season_year")
+      .single();
+
+    if (configError) {
+      addDebugInfo(`⚠️ Could not fetch season config: ${configError.message}`);
+    }
+
+    const seasonYear = config?.season_year ?? 2026;
+
     const { data, error } = await supabase
       .from("games")
       .select("*")
+      .eq("season", seasonYear)
       .order("start_time", { ascending: true });
 
     if (error) {
@@ -166,7 +179,6 @@ const MakePicksPage = () => {
       
       // Convert UTC time to MST (subtract 7 hours for UTC to MST)
       const utcDate = new Date(g.start_time);
-      const mstDate = new Date(utcDate.getTime() - 7 * 60 * 60 * 1000);
 
       // Determine game status and winner if not already set
       if (!status) {
@@ -185,7 +197,7 @@ const MakePicksPage = () => {
         week: g.week,
         homeTeam: g.team_a,
         awayTeam: g.team_b,
-        start_time: mstDate.toISOString(),
+        start_time: g.start_time,
         home_score: g.home_score,
         away_score: g.away_score,
         winner,
@@ -746,6 +758,7 @@ const MakePicksPage = () => {
     { href: "/all-picks", label: "View All Picks", icon: "📊" },
     { href: "/pick-summary", label: "Pick Percentages", icon: "📈" },
     { href: "/standings", label: "Standings", icon: "🏆" },
+    { href: "/pickem-groups", label: "Pick'em Groups", icon: "👥" },
     { href: "/rules", label: "Rules", icon: "📋" },
     { href: "/profile", label: "Profile", icon: "👤" },
   ];
@@ -783,7 +796,7 @@ const MakePicksPage = () => {
                   disabled={updatingScores}
                   className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 transition-colors text-xs disabled:bg-blue-300 disabled:cursor-not-allowed"
                 >
-                  {updatingScores ? 'Updating...' : 'Update Scores API'}
+                  {updatingScores ? 'Updating...' : 'Update ESPN API'}
                 </button>
                 <button
                   onClick={debugUserPicks}

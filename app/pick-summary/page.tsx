@@ -72,6 +72,7 @@ export default function PickPercentagesPage() {
   const [userSelectedWeek, setUserSelectedWeek] = useState<boolean>(false);
   const [sortBy, setSortBy] = useState<'percentage' | 'popularity' | 'team'>('percentage');
   const [viewMode, setViewMode] = useState<'games' | 'teams'>('games');
+  const [seasonYear, setSeasonYear] = useState(2026);
 
   // Navigation items
   const navItems = [
@@ -80,6 +81,7 @@ export default function PickPercentagesPage() {
     { href: "/all-picks", label: "View All Picks", icon: "📊" },
     { href: "/pick-summary", label: "Pick Percentages", icon: "📈" },
     { href: "/standings", label: "Standings", icon: "🏆" },
+    { href: "/pickem-groups", label: "Pick'en Groups", icon: "👥" },
     { href: "/rules", label: "Rules", icon: "📋" },
     { href: "/profile", label: "Profile", icon: "👤" },
   ];
@@ -119,6 +121,16 @@ export default function PickPercentagesPage() {
     try {
       setLoading(true);
 
+      // Get active season
+      const { data: config } = await supabase
+        .from("season_config")
+        .select("season_year")
+        .single();
+
+      const activeSeason = config?.season_year ?? 2026;
+
+setSeasonYear(activeSeason);
+
       // Fetch profiles
       const { data: profileData } = await supabase
         .from("profiles")
@@ -126,7 +138,10 @@ export default function PickPercentagesPage() {
       setProfiles(profileData || []);
 
       // Fetch games
-      const { data: gameData } = await supabase.from("games").select("*");
+      const { data: gameData } = await supabase
+        .from("games")
+        .select("*")
+        .eq("season", activeSeason);
       const filteredGameData = (gameData || []).filter((g: any) => 
         g.team_a && g.team_b && 
         g.team_a.trim() !== '' && g.team_b.trim() !== '' &&
@@ -134,13 +149,10 @@ export default function PickPercentagesPage() {
       );
 
       const mappedGames: Game[] = filteredGameData.map((g: any) => {
-        const utcDate = new Date(g.start_time);
-        const mstDate = new Date(utcDate.getTime() - 7 * 60 * 60 * 1000);
-
         return {
           id: g.id,
           week: g.week,
-          startTime: mstDate.toISOString(),
+          startTime: g.start_time,
           homeTeam: g.team_a,
           awayTeam: g.team_b,
           home_score: g.home_score,

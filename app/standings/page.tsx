@@ -68,6 +68,7 @@ export default function StandingsPage() {
     { href: "/all-picks", label: "View All Picks", icon: "📊" },
     { href: "/pick-summary", label: "Pick Percentages", icon: "📈" },
     { href: "/standings", label: "Standings", icon: "🏆" },
+    { href: "/pickem-groups", label: "Pick'em Groups", icon: "👥" },
     { href: "/rules", label: "Rules", icon: "📋" },
     { href: "/profile", label: "Profile", icon: "👤" },
   ];
