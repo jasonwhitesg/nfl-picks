@@ -40,6 +40,8 @@ const MakePicksPage = () => {
   const [debugActive, setDebugActive] = useState(false);
   const [headerExpanded, setHeaderExpanded] = useState(false);
   const [updatingScores, setUpdatingScores] = useState(false);
+  const [selectedSeason, setSelectedSeason] = useState<number>(2026);
+
 
   const addDebugInfo = (message: string) => {
     if (!debugActive) return;
@@ -141,17 +143,8 @@ const MakePicksPage = () => {
   const fetchGames = async (forceRefresh = false) => {
     addDebugInfo(`Fetching games from database... ${forceRefresh ? '(FORCED)' : ''}`);
     
-    // Get current season so ESPN 2026 games do not mix with old 2025 games
-    const { data: config, error: configError } = await supabase
-      .from("season_config")
-      .select("season_year")
-      .single();
 
-    if (configError) {
-      addDebugInfo(`⚠️ Could not fetch season config: ${configError.message}`);
-    }
-
-    const seasonYear = config?.season_year ?? 2026;
+    const seasonYear = selectedSeason;
 
     const { data, error } = await supabase
       .from("games")
@@ -253,14 +246,31 @@ const MakePicksPage = () => {
   };
 
   useEffect(() => {
+  if (!userId) return;
+
+  fetchGames();
+
+  const interval = setInterval(() => {
     fetchGames();
-    const interval = setInterval(() => fetchGames(), 30000);
-    return () => clearInterval(interval);
-  }, [now]);
+  }, 30000);
+
+  return () => clearInterval(interval);
+}, [userId, selectedSeason]);
+
+  useEffect(() => {
+    if (!userId) return;
+
+    setGames([]);
+    setActiveWeek(null);
+    setUserSelectedWeek(false);
+
+    fetchGames(true);
+  }, [selectedSeason, userId]);
 
   const handleWeekSelect = (week: number) => {
     setUserSelectedWeek(true);
     setActiveWeek(week);
+
     addDebugInfo(`🎯 User manually selected week: ${week}`);
   };
 
@@ -750,7 +760,7 @@ const MakePicksPage = () => {
 
   if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center">Loading...</div>;
 
-  const maxWeek = Math.max(...games.map((g) => g.week));
+  const maxWeek = games.length > 0 ? Math.max(...games.map((g) => g.week)) : 0;
   const currentWeekNum = activeWeek ?? 1;
 
   const navItems = [
@@ -1032,6 +1042,27 @@ const MakePicksPage = () => {
             </div>
           </div>
         )}
+
+        <div className="text-center mb-6">
+          <h2 className="text-3xl font-bold text-gray-800">
+            {selectedSeason} Season Picks
+          </h2>
+        </div>
+        <div className="flex justify-center gap-3 mb-6">
+          {[2025, 2026].map((season) => (
+            <button
+              key={season}
+              onClick={() => setSelectedSeason(season)}
+              className={`px-5 py-2 rounded-lg font-bold transition ${
+                selectedSeason === season
+                  ? "bg-blue-600 text-white"
+                  : "bg-gray-200 text-gray-800 hover:bg-gray-300"
+              }`}
+            >
+              {season} Season
+            </button>
+          ))}
+        </div>
 
         {/* Week Tabs */}
         <div className="overflow-x-auto mb-8">
