@@ -643,6 +643,58 @@ const MakePicksPage = () => {
     addDebugInfo(`🔍 Current userEmail state: ${userEmail}`);
   };
 
+  const teamStyles: Record<
+  string,
+  { primary: string; secondary: string; text: string }
+> = {
+  ARI: { primary: "#97233F", secondary: "#FFB612", text: "#ffffff" },
+  ATL: { primary: "#A71930", secondary: "#000000", text: "#ffffff" },
+  BAL: { primary: "#241773", secondary: "#9E7C0C", text: "#ffffff" },
+  BUF: { primary: "#00338D", secondary: "#C60C30", text: "#ffffff" },
+  CAR: { primary: "#0085CA", secondary: "#101820", text: "#ffffff" },
+  CHI: { primary: "#0B162A", secondary: "#C83803", text: "#ffffff" },
+  CIN: { primary: "#FB4F14", secondary: "#000000", text: "#ffffff" },
+  CLE: { primary: "#311D00", secondary: "#FF3C00", text: "#ffffff" },
+  DAL: { primary: "#041E42", secondary: "#869397", text: "#ffffff" },
+  DEN: { primary: "#FB4F14", secondary: "#002244", text: "#ffffff" },
+  DET: { primary: "#0076B6", secondary: "#B0B7BC", text: "#ffffff" },
+  GB: { primary: "#203731", secondary: "#FFB612", text: "#ffffff" },
+  HOU: { primary: "#03202F", secondary: "#A71930", text: "#ffffff" },
+  IND: { primary: "#002C5F", secondary: "#A2AAAD", text: "#ffffff" },
+  JAX: { primary: "#006778", secondary: "#D7A22A", text: "#ffffff" },
+  KC: { primary: "#E31837", secondary: "#FFB81C", text: "#ffffff" },
+  LAC: { primary: "#0080C6", secondary: "#FFC20E", text: "#ffffff" },
+  LAR: { primary: "#003594", secondary: "#FFA300", text: "#ffffff" },
+  LV: { primary: "#000000", secondary: "#A5ACAF", text: "#ffffff" },
+  MIA: { primary: "#008E97", secondary: "#FC4C02", text: "#ffffff" },
+  MIN: { primary: "#4F2683", secondary: "#FFC62F", text: "#ffffff" },
+  NE: { primary: "#002244", secondary: "#C60C30", text: "#ffffff" },
+  NO: { primary: "#D3BC8D", secondary: "#101820", text: "#000000" },
+  NYG: { primary: "#0B2265", secondary: "#A71930", text: "#ffffff" },
+  NYJ: { primary: "#125740", secondary: "#000000", text: "#ffffff" },
+  PHI: { primary: "#004C54", secondary: "#A5ACAF", text: "#ffffff" },
+  PIT: { primary: "#FFB612", secondary: "#101820", text: "#000000" },
+  SEA: { primary: "#002244", secondary: "#69BE28", text: "#ffffff" },
+  SF: { primary: "#AA0000", secondary: "#B3995D", text: "#ffffff" },
+  TB: { primary: "#D50A0A", secondary: "#34302B", text: "#ffffff" },
+  TEN: { primary: "#4B92DB", secondary: "#C8102E", text: "#ffffff" },
+  WAS: { primary: "#5A1414", secondary: "#FFB612", text: "#ffffff" },
+};
+
+const getTeamStyle = (team?: string | null) => {
+  if (!team) {
+    return { primary: "#ffffff", secondary: "#e5e7eb", text: "#111827" };
+  }
+
+  return (
+    teamStyles[team] || {
+      primary: "#2563eb",
+      secondary: "#1e40af",
+      text: "#ffffff",
+    }
+  );
+};
+
   const formatTime = (iso: string) => {
     return new Date(iso).toLocaleString("en-US", {
       timeZone: "America/Denver",
@@ -762,6 +814,23 @@ const MakePicksPage = () => {
 
   const maxWeek = games.length > 0 ? Math.max(...games.map((g) => g.week)) : 0;
   const currentWeekNum = activeWeek ?? 1;
+
+  const getWeekStatusColor = (week: number) => {
+  const weekGames = gamesByWeek[week] || [];
+
+  if (activeWeek === week) {
+    return "bg-green-600 text-white border-green-700";
+  }
+
+  const allGamesFinal =
+    weekGames.length > 0 && weekGames.every((g) => g.status === "Final");
+
+  if (allGamesFinal) {
+    return "bg-red-500 text-white border-red-600";
+  }
+
+  return "bg-blue-500 text-white border-blue-600";
+};
 
   const navItems = [
     { href: "/", label: "Home", icon: "🏠" },
@@ -1043,53 +1112,57 @@ const MakePicksPage = () => {
           </div>
         )}
 
-        <div className="text-center mb-6">
-          <h2 className="text-3xl font-bold text-gray-800">
-            {selectedSeason} Season Picks
+        <div className="text-center mb-8">
+        <div className="inline-block bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-5 rounded-2xl shadow-lg">
+          <h2 className="text-4xl font-extrabold tracking-tight">
+            🏈 Make Your Picks
           </h2>
+
+          <p className="text-blue-100 mt-2 text-lg font-semibold">
+            Season {selectedSeason} • Week {activeWeek ?? "-"}
+          </p>
         </div>
-        <div className="flex justify-center gap-3 mb-6">
-          {[2025, 2026].map((season) => (
-            <button
-              key={season}
-              onClick={() => setSelectedSeason(season)}
-              className={`px-5 py-2 rounded-lg font-bold transition ${
-                selectedSeason === season
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-200 text-gray-800 hover:bg-gray-300"
-              }`}
+      </div>
+
+        {/* Week Wheel Selector */}
+        <div className="mb-8 flex justify-center">
+          <div className="bg-white border border-gray-300 rounded-2xl shadow-lg p-5 w-full max-w-md">
+            <label className="block text-lg font-extrabold text-gray-800 mb-3 text-center">
+              Select Week
+            </label>
+
+            <select
+              value={activeWeek ?? ""}
+              onChange={(e) => handleWeekSelect(Number(e.target.value))}
+              className={`w-full px-4 py-4 rounded-xl border-2 font-extrabold text-center text-xl focus:outline-none focus:ring-4 focus:ring-blue-300 ${getWeekStatusColor(
+                activeWeek ?? currentWeekNum
+              )}`}
             >
-              {season} Season
-            </button>
-          ))}
-        </div>
+              {Array.from({ length: maxWeek }, (_, i) => i + 1).map((week) => {
+                const weekGames = gamesByWeek[week] || [];
+                const allGamesFinal =
+                  weekGames.length > 0 && weekGames.every((g) => g.status === "Final");
 
-        {/* Week Tabs */}
-        <div className="overflow-x-auto mb-8">
-          <div className="flex gap-2 min-w-max px-2 pb-2">
-            {Array.from({ length: maxWeek }, (_, i) => i + 1).map((week) => {
-              const isActive = activeWeek === week;
-              const weekGames = gamesByWeek[week] || [];
-              const allGamesFinal = weekGames.length > 0 && weekGames.every(g => g.status === "Final");
-              
-              let color = "bg-blue-500 text-white hover:bg-blue-600";
-              if (isActive) {
-                color = "bg-green-500 text-white";
-              } else if (allGamesFinal) {
-                color = "bg-gray-400 text-white";
-              }
+                const label =
+                  activeWeek === week
+                    ? `🟢 Week ${week} Current`
+                    : allGamesFinal
+                    ? `🔴 Week ${week} Passed`
+                    : `🔵 Week ${week} Coming`;
 
-              return (
-                <button
-                  key={week}
-                  onClick={() => handleWeekSelect(week)}
-                  className={`px-4 py-2 rounded-md text-sm font-semibold flex items-center gap-1 transition-all ${color}`}
-                >
-                  Week {week}
-                  {allGamesFinal && <span className="text-white font-bold">✔</span>}
-                </button>
-              );
-            })}
+                return (
+                  <option key={week} value={week}>
+                    {label}
+                  </option>
+                );
+              })}
+            </select>
+
+            <div className="flex justify-center gap-3 mt-4 text-xs font-bold">
+              <span className="text-green-600">🟢 Current</span>
+              <span className="text-red-600">🔴 Passed</span>
+              <span className="text-blue-600">🔵 Coming</span>
+            </div>
           </div>
         </div>
 
@@ -1106,34 +1179,150 @@ const MakePicksPage = () => {
             const actualTotal = g.home_score != null && g.away_score != null ? g.home_score + g.away_score : null;
             const pickCorrect = isFinal && pick ? (pick === g.winner ? true : false) : null;
             const mondayNightButtonsDisabled = isMondayNight && !isFinal && !locked && !userHasSetTotal;
+            const pickedTeamStyle = getTeamStyle(pick);
+            const homeStyle = getTeamStyle(g.homeTeam);
+            const awayStyle = getTeamStyle(g.awayTeam);
+
+            const teamColors: Record<string, string> = {
+              ARI: "bg-red-700 text-white border-red-800",
+              ATL: "bg-red-600 text-white border-red-700",
+              BAL: "bg-purple-700 text-white border-purple-800",
+              BUF: "bg-blue-700 text-white border-blue-800",
+              CAR: "bg-sky-500 text-white border-sky-600",
+              CHI: "bg-orange-700 text-white border-orange-800",
+              CIN: "bg-orange-500 text-black border-orange-600",
+              CLE: "bg-orange-800 text-white border-orange-900",
+              DAL: "bg-blue-800 text-white border-blue-900",
+              DEN: "bg-orange-600 text-white border-orange-700",
+              DET: "bg-blue-500 text-white border-blue-600",
+              GB: "bg-green-700 text-yellow-200 border-green-800",
+              HOU: "bg-blue-900 text-white border-blue-950",
+              IND: "bg-blue-700 text-white border-blue-800",
+              JAX: "bg-teal-700 text-white border-teal-800",
+              KC: "bg-red-600 text-yellow-200 border-red-700",
+              LAC: "bg-yellow-400 text-blue-900 border-yellow-500",
+              LAR: "bg-blue-700 text-yellow-300 border-blue-800",
+              LV: "bg-gray-900 text-white border-gray-950",
+              MIA: "bg-teal-500 text-white border-teal-600",
+              MIN: "bg-purple-700 text-yellow-300 border-purple-800",
+              NE: "bg-blue-800 text-white border-blue-900",
+              NO: "bg-yellow-600 text-black border-yellow-700",
+              NYG: "bg-blue-700 text-white border-blue-800",
+              NYJ: "bg-green-700 text-white border-green-800",
+              PHI: "bg-emerald-800 text-white border-emerald-900",
+              PIT: "bg-yellow-400 text-black border-yellow-500",
+              SEA: "bg-green-500 text-blue-950 border-green-600",
+              SF: "bg-red-700 text-yellow-300 border-red-800",
+              TB: "bg-red-700 text-white border-red-800",
+              TEN: "bg-sky-700 text-white border-sky-800",
+              WAS: "bg-red-900 text-yellow-300 border-red-950",
+            };
+
+            const getTeamColor = (team: string) => {
+              return teamColors[team] || "bg-blue-600 text-white border-blue-700";
+            };
 
             const teamBtn = (team: string) => {
-              let base = "px-4 py-2 rounded-md font-semibold transition-all text-center min-w-[80px]";
+              const teamStyle = getTeamStyle(team);
+              const selected = pick === team;
+
+              let base =
+                "px-6 py-3 rounded-xl font-extrabold transition-all text-center min-w-[95px] border-4 shadow-lg transform";
 
               if (mondayNightButtonsDisabled) {
-                base += " bg-gray-100 text-gray-400 cursor-not-allowed";
-              } else if (pick === team && !isFinal) {
-                base += " bg-blue-500 text-white";
-              } else if (pick === team && isFinal) {
-                base += pickCorrect ? " bg-green-500 text-white" : " bg-red-500 text-white";
-              } else if (locked && pick !== team) {
-                base += " bg-gray-100 text-gray-500 cursor-not-allowed";
-              } else {
-                base += " bg-gray-200 text-gray-800 hover:bg-gray-300 cursor-pointer";
+                return `${base} cursor-not-allowed opacity-50`;
               }
 
-              return base;
+              if (selected && !isFinal) {
+                return `${base} scale-110 ring-4 ring-white`;
+              }
+
+              if (selected && isFinal) {
+                return `${base} scale-110 ring-4 ${
+                  pickCorrect ? "ring-green-300" : "ring-red-300"
+                }`;
+              }
+
+              if (locked && !selected) {
+                return `${base} opacity-50 cursor-not-allowed`;
+              }
+
+              return `${base} hover:scale-110 hover:shadow-2xl cursor-pointer`;
             };
 
             return (
-              <div
-                key={g.id}
-                className="border-2 border-gray-300 rounded-xl p-6 mb-6 flex flex-col gap-4 max-w-2xl mx-auto w-full bg-white shadow-lg hover:shadow-2xl hover:-translate-y-1 hover:border-blue-200 transform-gpu"
-              >
+            <div
+              key={g.id}
+
+              className="
+              rounded-3xl
+              p-2
+              mb-8
+              max-w-2xl
+              mx-auto
+              w-full
+              transition-all
+              duration-500
+              "
+
+              style={{
+                background: pick
+                  ? `linear-gradient(
+                      135deg,
+                      ${pickedTeamStyle.primary},
+                      ${pickedTeamStyle.secondary}
+                    )`
+                  : "linear-gradient(135deg,#ffffff,#f5f5f5)",
+
+                boxShadow: pick
+                  ? `
+                    0 0 0 10px ${pickedTeamStyle.secondary},
+                    0 0 60px ${pickedTeamStyle.primary},
+                    0 30px 70px rgba(0,0,0,.35)
+                  `
+                  : `
+                    0 20px 40px rgba(0,0,0,.18)
+                  `,
+              }}
+            >
+
+            <div
+              className="
+              rounded-2xl
+              p-6
+              flex
+              flex-col
+              gap-4
+              "
+
+              style={{
+                background: pick
+                  ? `linear-gradient(
+                      145deg,
+                      ${pickedTeamStyle.primary},
+                      ${pickedTeamStyle.secondary}
+                    )`
+                  : "#ffffff",
+
+                color: pick
+                  ? pickedTeamStyle.text
+                  : "#111827",
+              }}
+            >              
                 {/* Game Header */}
                 <div className="flex flex-col items-center text-center gap-3">
                   <div className="flex items-center gap-2">
-                    <div className="font-bold text-xl sm:text-2xl text-gray-800">
+                    <div
+                      className="font-extrabold text-2xl sm:text-3xl tracking-wide px-5 py-3 rounded-xl shadow-lg border-2"
+                      style={{
+                        background: pick
+                          ? "rgba(255,255,255,0.18)"
+                          : "linear-gradient(135deg, #111827, #374151)",
+                        color: "#ffffff",
+                        borderColor: pick ? "rgba(255,255,255,0.45)" : "#111827",
+                        textShadow: "0 2px 4px rgba(0,0,0,0.35)",
+                      }}
+                    >
                       {g.awayTeam} @ {g.homeTeam}
                     </div>
                     {isMondayNight && (
@@ -1148,9 +1337,6 @@ const MakePicksPage = () => {
                       isLive ? "text-green-600" : isFinal ? "text-gray-800" : "text-blue-600"
                     }`}>
                       {isFinal ? "FINAL" : isLive ? "LIVE" : "UPCOMING"}
-                    </div>
-                    <div className="text-sm text-gray-600 font-medium">
-                      {formatTime(g.start_time)} MST
                     </div>
                   </div>
 
@@ -1261,12 +1447,56 @@ const MakePicksPage = () => {
                 {/* Countdown */}
                 {!isFinal && !isLive && (
                   <div className="flex justify-center">
-                    <div className="font-bold text-red-600 bg-red-100 px-4 py-2 rounded-lg border-2 border-red-200 text-center shadow-sm">
-                      {getLockMessage(new Date(g.start_time), g.id)}
+                    <div
+                      className="
+                      font-black
+                      px-6
+                      py-4
+                      rounded-2xl
+                      border-4
+                      text-center
+                      shadow-xl
+                      max-w-md
+                      w-full
+                      "
+                      style={{
+                        background: pick
+                          ? "rgba(255,255,255,.20)"
+                          : "#fee2e2",
+
+                        color: pick
+                          ? "#ffffff"
+                          : "#991b1b",
+
+                        borderColor: pick
+                          ? "rgba(255,255,255,.45)"
+                          : "#fecaca",
+
+                        textShadow: pick
+                          ? "0 2px 8px rgba(0,0,0,.5)"
+                          : "none",
+                      }}
+                    >
+                      <div className="text-sm uppercase tracking-widest opacity-90">
+                        Game Start Time
+                      </div>
+
+                      <div className="text-xl sm:text-2xl mt-1">
+                        🕒 {formatTime(g.start_time)} MST
+                      </div>
+
+                      <div className="mt-3 text-sm uppercase tracking-widest opacity-90">
+                        Pick Lock Countdown
+                      </div>
+
+                      <div className="text-lg sm:text-xl mt-1">
+                        {getLockMessage(new Date(g.start_time), g.id)}
+                      </div>
                     </div>
                   </div>
                 )}
               </div>
+            </div>
             );
           })}
       </main>
