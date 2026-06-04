@@ -88,12 +88,16 @@ const AllPicksPage = () => {
   const [storingWinners, setStoringWinners] = useState(false);
   const [gamesByWeek, setGamesByWeek] = useState<Record<number, Game[]>>({});
 
-  // ADDED: State for fixed Week 18 data
-  const [fixedWeek18Data, setFixedWeek18Data] = useState<{
+  // ADDED: State for fixed week data (all weeks)
+  const [fixedWeekData, setFixedWeekData] = useState<{
     users: Profile[];
     picksByUser: Record<string, Pick[]>;
     games: Game[];
-  }>({ users: [], picksByUser: {}, games: [] });
+  }>({
+    users: [],
+    picksByUser: {},
+    games: []
+  });
 
   const [seasonYear, setSeasonYear] = useState(2026);
 
@@ -544,7 +548,7 @@ const AllPicksPage = () => {
   };
 
   // ADDED: Get direct Week 18 data from database to fix the mismatch
-  const fetchDirectWeek18Data = async () => {
+  const fetchDirectWeekData = async (week: number) => {
     try {
       console.log('📊 Fetching direct Week 18 data from database...');
       
@@ -552,7 +556,8 @@ const AllPicksPage = () => {
       const { data: week18GamesData, error: gamesError } = await supabase
         .from('games')
         .select('*')
-        .eq('week', 18);
+        .eq('season', seasonYear)
+        .eq('week', week)
 
       if (gamesError) throw gamesError;
 
@@ -580,10 +585,11 @@ const AllPicksPage = () => {
         .from('game_picks')
         .select(`
           *,
-          games!inner(week, team_a, team_b),
+          games!inner(week, season, team_a, team_b),
           profiles!inner(username, user_id, first_name, last_name, email, is_admin)
         `)
-        .eq('games.week', 18);
+        .eq('games.season', seasonYear)
+        .eq('games.week', week);
 
       if (picksError) throw picksError;
 
@@ -625,7 +631,7 @@ const AllPicksPage = () => {
       console.log(`✅ Fetched direct Week 18 data: ${week18Users.length} users, ${mappedWeek18Games.length} games`);
       console.log(`👥 Week 18 users with picks:`, week18Users.map(u => u.username));
 
-      setFixedWeek18Data({
+      setFixedWeekData({
         users: week18Users,
         picksByUser,
         games: mappedWeek18Games
@@ -1140,9 +1146,6 @@ const AllPicksPage = () => {
           }
         }
         
-        // Fetch direct Week 18 data to fix the mismatch
-        setTimeout(() => fetchDirectWeek18Data(), 1000);
-        
         setLoading(false);
       } catch (err) {
         console.error("Error loading All Picks:", err);
@@ -1167,6 +1170,12 @@ const AllPicksPage = () => {
     }
   }, [activeWeek, profiles]);
 
+  useEffect(() => {
+    if (activeWeek) {
+      fetchDirectWeekData(activeWeek);
+    }
+  }, [activeWeek]);
+
   // FIXED: Calculate user stats and best performers for ACTIVE WEEK only
   useEffect(() => {
     if (games.length === 0 || picks.length === 0 || profiles.length === 0 || !activeWeek) return;
@@ -1179,11 +1188,11 @@ const AllPicksPage = () => {
     let userPicksMap: Record<string, Pick[]> = {};
     let weekProfiles: Profile[] = [];
 
-    if (activeWeek === 18 && fixedWeek18Data.users.length > 0) {
+    if (fixedWeekData.users.length > 0) {
       // Use FIXED Week 18 data
-      weekGames = fixedWeek18Data.games;
-      userPicksMap = fixedWeek18Data.picksByUser;
-      weekProfiles = fixedWeek18Data.users;
+      weekGames = fixedWeekData.games;
+      userPicksMap = fixedWeekData.picksByUser;
+      weekProfiles = fixedWeekData.users;
     } else {
       // Use regular data for other weeks
       weekGames = gamesByWeek[activeWeek] || [];
@@ -1201,7 +1210,7 @@ const AllPicksPage = () => {
       // For Week 18 with fixed data, we know they have picks
       // For other weeks, check if they have picks
       let hasMadePicks = false;
-      if (activeWeek === 18 && fixedWeek18Data.users.some(u => u.user_id === profile.user_id)) {
+      if (fixedWeekData.users.some(u => u.user_id === profile.user_id)) {
         hasMadePicks = true;
         playersWithPicks.push(profile.user_id);
       } else {
@@ -1370,7 +1379,7 @@ const AllPicksPage = () => {
       paidMostCorrect: paidWinners,
       unpaidMostCorrect: unpaidWinners
     });
-  }, [games, picks, profiles, activeWeek, paidStatus, gamesByWeek, fixedWeek18Data]);
+  }, [games, picks, profiles, activeWeek, paidStatus, gamesByWeek, fixedWeekData]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -1381,14 +1390,18 @@ const AllPicksPage = () => {
   const handleWeekSelect = (week: number) => {
     setUserSelectedWeek(true);
     setActiveWeek(week);
+
+    setTimeout(() => {
+      fetchDirectWeekData(week);
+    }, 100);
   };
 
   // ADDED: Get user picks for active week - USING FIXED DATA FOR WEEK 18
   const getUserPicksForActiveWeek = (userId: string) => {
     if (!activeWeek) return [];
     
-    if (activeWeek === 18 && fixedWeek18Data.picksByUser[userId]) {
-      return fixedWeek18Data.picksByUser[userId];
+    if (fixedWeekData.picksByUser[userId]) {
+      return fixedWeekData.picksByUser[userId];
     }
     
     return picks.filter(pick => pick.user_id === userId);
@@ -1398,8 +1411,8 @@ const AllPicksPage = () => {
   const getActiveWeekGames = () => {
     if (!activeWeek) return [];
     
-    if (activeWeek === 18 && fixedWeek18Data.games.length > 0) {
-      return fixedWeek18Data.games;
+    if (fixedWeekData.games.length > 0) {
+      return fixedWeekData.games;
     }
     
     return gamesByWeek[activeWeek] || [];
@@ -1408,8 +1421,8 @@ const AllPicksPage = () => {
   // Sort profiles - FIXED: Show ALL users who made picks
   const getSortedProfiles = () => {
     // SPECIAL HANDLING FOR WEEK 18 - Use fixed data
-    if (activeWeek === 18 && fixedWeek18Data.users.length > 0) {
-      return fixedWeek18Data.users.sort((a, b) => {
+    if (fixedWeekData.users.length > 0) {
+      return fixedWeekData.users.sort((a, b) => {
         const statsA = userStats[a.user_id] || { percentage: 0, correctPicks: 0 };
         const statsB = userStats[b.user_id] || { percentage: 0, correctPicks: 0 };
         
