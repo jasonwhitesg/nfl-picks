@@ -211,7 +211,17 @@ export default function PickPercentagesPage() {
     const { data: gameData } = await supabase
       .from("games")
       .select("*")
-      .eq("season", activeSeason);
+      .eq("season", activeSeason)
+      .order("start_time", { ascending: true });
+
+      console.log("ACTIVE SEASON:", activeSeason);
+      console.log("GAMES LOADED:", gameData?.map(g => ({
+        season: g.season,
+        week: g.week,
+        team_a: g.team_a,
+        team_b: g.team_b,
+        start_time: g.start_time
+      })));
 
     const filteredGameData = (gameData || []).filter(
       (g: any) =>
@@ -256,24 +266,24 @@ export default function PickPercentagesPage() {
     setPicks(pickData || []);
 
     const weekNumbers = Array.from(
-      new Set(sortedGames.map((game) => game.week))
-    ).sort((a, b) => a - b);
+        new Set(sortedGames.map((game) => game.week))
+      ).sort((a, b) => a - b);
 
-    const now = new Date();
-    let selectedWeek = weekNumbers[0] || 1;
+      const now = new Date();
+      let selectedWeek = weekNumbers[0] || 1;
 
-    for (const week of weekNumbers) {
-      const weekGames = sortedGames.filter((game) => game.week === week);
+      for (const week of weekNumbers) {
+        const weekGames = sortedGames.filter((game) => game.week === week);
 
-      const hasUpcomingOrLive = weekGames.some((game) => {
-        const gameTime = new Date(game.startTime);
-        return gameTime > now || game.status !== "Final";
-      });
+        const hasUpcomingOrLive = weekGames.some((game) => {
+          const gameTime = new Date(game.startTime);
+          return gameTime > now || game.status !== "Final";
+        });
 
-      if (hasUpcomingOrLive) {
-        selectedWeek = week;
-        break;
-      }
+        if (hasUpcomingOrLive) {
+          selectedWeek = week;
+          break;
+        }
     }
 
     setActiveWeek(selectedWeek);
