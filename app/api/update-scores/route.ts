@@ -1,259 +1,152 @@
 // app/api/update-scores/route.ts
 import { NextResponse } from "next/server";
 import axios from "axios";
-import { supabase } from "@/lib/supabaseClient";
+import { createClient } from "@supabase/supabase-js";
 
 const DEFAULT_SEASON = 2026;
 
-interface Competitor {
-  homeAway: "home" | "away";
-  score: string;
-  team: {
-    abbreviation: string;
-    displayName: string;
-  };
-}
+// This route writes game scores. Keep the service role key on the server only.
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+  { auth: { persistSession: false, autoRefreshToken: false } }
+);
 
-interface Event {
+type Competitor = {
+  homeAway: "home" | "away";
+  score?: string;
+  team: { abbreviation: string };
+};
+type Event = {
   id: string;
   date: string;
-  name: string;
-  status: {
-    type: {
-      state: "pre" | "in" | "post";
-    };
-  };
-  competitions: {
-    competitors: Competitor[];
-  }[];
-}
-
-const teamMap: Record<string, string> = {
-  WSH: "WAS",
-  LAR: "LAR",
-  LAC: "LAC",
+  status: { type: { state: "pre" | "in" | "post" } };
+  competitions: { competitors: Competitor[] }[];
 };
 
-function normalizeTeam(abbr: string) {
-  return teamMap[abbr] || abbr;
-}
-
-function getStatus(event: Event) {
-  const state = event.status?.type?.state;
-
-  if (state === "pre") return "Scheduled";
-  if (state === "in") return "InProgress";
-  if (state === "post") return "Final";
-
-  return "Scheduled";
-}
-
-function isMondayNight(dateString: string) {
-  const day = new Date(dateString).toLocaleDateString("en-US", {
-    timeZone: "America/Denver",
-    weekday: "long",
-  });
-
-  return day === "Monday";
-}
-
-async function getSeasonConfig() {
-  const { data, error } = await supabase
-    .from("season_config")
-    .select("season_year, current_week")
-    .single();
-
-  if (error) {
-    console.error("season_config error:", error.message);
-    return {
-      season: DEFAULT_SEASON,
-      currentWeek: 1,
-    };
-  }
-
-  return {
-    season: data?.season_year ?? DEFAULT_SEASON,
-    currentWeek: data?.current_week ?? 1,
-  };
-}
+const teamMap: Record<string, string> = { WSH: "WAS" };
+const normalizeTeam = (abbr: string) => teamMap[abbr] ?? abbr;
+const getStatus = (event: Event) =>
+  ({ pre: "Scheduled", in: "InProgress", post: "Final" }[event.status?.type?.state] ?? "Scheduled");
+const isMondayNight = (date: string) =>
+  new Intl.DateTimeFormat("en-US", { timeZone: "America/Denver", weekday: "long" })
+    .format(new Date(date)) === "Monday";
 
 async function fetchEspnWeek(season: number, week: number) {
-  const url =
-    `https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard` +
-    `?dates=${season}&seasontype=2&week=${week}`;
-
-  const response = await axios.get<{ events: Event[] }>(url);
-  return response.data.events ?? [];
+  const { data } = await axios.get<{ events: Event[] }>(
+    "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+    { params: { dates: season, seasontype: 2, week }, timeout: 15_000 }
+  );
+  return data.events ?? [];
 }
 
-function mapEspnEventToGame(event: Event, season: number, week: number) {
+function mapEvent(event: Event, season: number, week: number) {
   const competitors = event.competitions?.[0]?.competitors ?? [];
-
-  const home = competitors.find((c) => c.homeAway === "home");
-  const away = competitors.find((c) => c.homeAway === "away");
-
+  const home = competitors.find(c => c.homeAway === "home");
+  const away = competitors.find(c => c.homeAway === "away");
   if (!home || !away) return null;
 
-  const homeTeam = normalizeTeam(home.team.abbreviation);
-  const awayTeam = normalizeTeam(away.team.abbreviation);
-
-  const homeScore =
-    home.score !== undefined && home.score !== "" ? Number(home.score) : null;
-
-  const awayScore =
-    away.score !== undefined && away.score !== "" ? Number(away.score) : null;
-
+  const team_a = normalizeTeam(home.team.abbreviation);
+  const team_b = normalizeTeam(away.team.abbreviation);
+  const home_score = home.score == null || home.score === "" ? null : Number(home.score);
+  const away_score = away.score == null || away.score === "" ? null : Number(away.score);
   const status = getStatus(event);
-
-  let winner: string | null = null;
-
-  if (
-    status === "Final" &&
-    homeScore !== null &&
-    awayScore !== null &&
-    homeScore !== awayScore
-  ) {
-    winner = homeScore > awayScore ? homeTeam : awayTeam;
-  }
-
-  const mondayNight = isMondayNight(event.date);
-
-  const actualTotalPoints =
-    mondayNight &&
-    status === "Final" &&
-    homeScore !== null &&
-    awayScore !== null
-      ? homeScore + awayScore
-      : null;
+  const monday = isMondayNight(event.date);
+  const winner = status === "Final" && home_score !== null && away_score !== null && home_score !== away_score
+    ? (home_score > away_score ? team_a : team_b) : null;
 
   return {
-    id: event.id,
-    week,
-    season,
-
-    // Keep ESPN time as UTC. Do NOT convert here.
-    start_time: event.date,
-
-    // Your app uses team_a as home and team_b as away.
-    team_a: homeTeam,
-    team_b: awayTeam,
-
-    home_score: homeScore,
-    away_score: awayScore,
-    winner,
-    status,
-    is_monday_night: mondayNight,
-    actual_total_points: actualTotalPoints,
-    sportsdata_game_id: null,
+    id: event.id, season, week, start_time: event.date, team_a, team_b,
+    home_score, away_score, status, winner,
+    is_monday_night: monday,
+    actual_total_points: monday && status === "Final" && home_score !== null && away_score !== null
+      ? home_score + away_score : null,
   };
 }
 
-async function loadFullSchedule(season: number) {
-  const allGames: any[] = [];
-
-  for (let week = 1; week <= 18; week++) {
-    const events = await fetchEspnWeek(season, week);
-
-    for (const event of events) {
-      const game = mapEspnEventToGame(event, season, week);
-      if (game) allGames.push(game);
-    }
-  }
-
-  if (allGames.length === 0) {
-    return {
-      count: 0,
-      message: "No ESPN games found",
-    };
-  }
-
-  const { error } = await supabase
-    .from("games")
-    .upsert(allGames, { onConflict: "id" });
-
-  if (error) throw error;
-
-  return {
-    count: allGames.length,
-    message: `Full ${season} schedule loaded from ESPN`,
-  };
-}
-
-async function refreshCurrentWeek(season: number, week: number) {
+async function refreshWeek(season: number, week: number) {
   const events = await fetchEspnWeek(season, week);
-  const gamesToUpsert: any[] = [];
-
-  for (const event of events) {
-    const game = mapEspnEventToGame(event, season, week);
-    if (game) gamesToUpsert.push(game);
-  }
-
-  if (gamesToUpsert.length === 0) {
-    return {
-      count: 0,
-      message: `No games found for week ${week}`,
-    };
-  }
-
-  const { error } = await supabase
-    .from("games")
-    .upsert(gamesToUpsert, { onConflict: "id" });
-
+  const games = events.map(event => mapEvent(event, season, week)).filter(
+    (game): game is NonNullable<typeof game> => game !== null
+  );
+  if (games.length === 0) throw new Error(`ESPN returned no games for week ${week}`);
+  const { error } = await supabase.from("games").upsert(games, { onConflict: "id" });
   if (error) throw error;
-
-  return {
-    count: gamesToUpsert.length,
-    message: `Week ${week} times and scores refreshed from ESPN`,
-  };
+  return { week, count: games.length };
 }
 
-export async function GET() {
+async function isAuthorized(request: Request) {
+  const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+  if (!token) return false;
+  if (process.env.CRON_SECRET && token === process.env.CRON_SECRET) return true;
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data.user) return false;
+  const { data: profile, error: profileError } = await supabase.from("profiles")
+    .select("is_admin").eq("user_id", data.user.id).single();
+  return !profileError && profile?.is_admin === true;
+}
+
+async function updateScores(request: Request) {
   try {
-    const { season, currentWeek } = await getSeasonConfig();
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      throw new Error("Missing Supabase server configuration");
+    }
+    if (!(await isAuthorized(request))) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const { data: config, error: configError } = await supabase
+      .from("season_config").select("season_year, current_week").single();
+    if (configError) throw configError;
+    const season = config?.season_year ?? DEFAULT_SEASON;
 
-    const { count, error: countError } = await supabase
-      .from("games")
-      .select("*", { count: "exact", head: true })
-      .eq("season", season);
+    const { data: schedule, error: scheduleError } = await supabase
+      .from("games").select("week, start_time").eq("season", season)
+      .order("start_time", { ascending: true });
+    if (scheduleError) throw scheduleError;
 
-    if (countError) throw countError;
+    let games = schedule ?? [];
+    if (games.length === 0) {
+      // Populate the season once, then select the week from actual kickoff times.
+      for (let week = 1; week <= 18; week++) await refreshWeek(season, week);
+      const { data, error } = await supabase.from("games").select("week, start_time")
+        .eq("season", season).order("start_time", { ascending: true });
+      if (error) throw error;
+      games = data ?? [];
+    }
+    if (games.length === 0) throw new Error(`No ${season} schedule found`);
 
-    if (!count || count === 0) {
-      const result = await loadFullSchedule(season);
+    const now = Date.now();
+    const weeks = Array.from(new Set(games.map(game => game.week))).sort((a, b) => a - b);
+    const currentWeek = weeks.find(week =>
+      games.some(game => game.week === week && new Date(game.start_time).getTime() > now)
+    ) ?? weeks[weeks.length - 1];
 
-      return NextResponse.json({
-        action: "full_schedule_loaded",
-        season,
-        ...result,
-      });
+    // An admin-triggered POST repairs every week played so far. Cron GETs stay small.
+    const backfill = request.method === "POST";
+    const results = backfill
+      ? await Promise.all(weeks.filter(week => week <= currentWeek).map(week => refreshWeek(season, week)))
+      : [await refreshWeek(season, currentWeek)];
+    const previousWeek = weeks.filter(week => week < currentWeek).at(-1);
+    if (!backfill && previousWeek !== undefined) {
+      const latestStart = Math.max(...games.filter(game => game.week === previousWeek)
+        .map(game => new Date(game.start_time).getTime()));
+      // Finish updating Monday scores after the displayed week has advanced.
+      if (now - latestStart < 48 * 60 * 60 * 1000) {
+        results.push(await refreshWeek(season, previousWeek));
+      }
     }
 
-    const result = await refreshCurrentWeek(season, currentWeek);
-
-    return NextResponse.json({
-      action: "current_week_refreshed",
-      season,
-      week: currentWeek,
-      ...result,
-    });
-  } catch (err: any) {
-    console.error("ESPN refresh error:", err);
-
-    return NextResponse.json(
-      {
-        error: err.message ?? "Failed to refresh ESPN schedule",
-      },
-      { status: 500 }
-    );
+    if (config && config.current_week !== currentWeek) {
+      const { error } = await supabase.from("season_config")
+        .update({ current_week: currentWeek }).eq("season_year", season);
+      if (error) throw error;
+    }
+    return NextResponse.json({ season, currentWeek, refreshed: results });
+  } catch (error) {
+    console.error("ESPN refresh error:", error);
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Score update failed" }, { status: 500 });
   }
 }
 
-export async function POST() {
-  return GET();
-}
-
-
-
-
-
-
+export async function GET(request: Request) { return updateScores(request); }
+export async function POST(request: Request) { return updateScores(request); }

@@ -86,6 +86,8 @@ const AllPicksPage = () => {
   const [headerExpanded, setHeaderExpanded] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [storingWinners, setStoringWinners] = useState(false);
+  const [updatingScores, setUpdatingScores] = useState(false);
+  const [scoreRefreshVersion, setScoreRefreshVersion] = useState(0);
   const [gamesByWeek, setGamesByWeek] = useState<Record<number, Game[]>>({});
 
   // ADDED: State for fixed week data (all weeks)
@@ -1091,61 +1093,15 @@ const AllPicksPage = () => {
         const { data: pickData } = await supabase.from("game_picks").select("*");
         setPicks(pickData || []);
 
-        // FIXED: IMPROVED WEEK SELECTION - Find the CURRENT week with upcoming/live games
+        // Use kickoff times so stale game statuses cannot hold the page on an old week.
         if (!userSelectedWeek) {
-          const weekNumbers = Array.from(new Set(sortedGames.map((g) => g.week))).sort((a, b) => a - b);
-          const nowMST = getNowMST();
-          
-          let newActiveWeek = activeWeek;
-          
-          console.log("🔍 WEEK DETECTION LOGIC:");
-          console.log("All weeks:", weekNumbers);
-          
-          // Find the current week - look for weeks with upcoming or live games
-          for (let week of weekNumbers) {
-            const weekGames = sortedGames.filter(g => g.week === week);
-            
-            if (weekGames.length === 0) continue;
-            
-            const hasUpcomingGames = weekGames.some(game => new Date(game.startTime) > nowMST);
-            const hasLiveGames = weekGames.some(game => game.status === "InProgress");
-            const allGamesFinal = weekGames.every(game => game.status === "Final");
-            
-            console.log(`Week ${week}: upcoming=${hasUpcomingGames}, live=${hasLiveGames}, allFinal=${allGamesFinal}`);
-            
-            // Priority 1: Weeks with live games
-            if (hasLiveGames) {
-              newActiveWeek = week;
-              console.log(`🎯 Setting active week to ${week} - has LIVE games`);
-              break;
-            }
-            
-            // Priority 2: Weeks with upcoming games (not all final)
-            if (hasUpcomingGames && !allGamesFinal) {
-              newActiveWeek = week;
-              console.log(`🎯 Setting active week to ${week} - has UPCOMING games`);
-              break;
-            }
-            
-            // Priority 3: If we haven't found an active week yet, use the most recent week with games
-            if (!newActiveWeek) {
-              newActiveWeek = week;
-              console.log(`📌 Setting fallback week to ${week}`);
-            }
-          }
-          
-          // Final fallback: use the highest week number
-          if (!newActiveWeek && weekNumbers.length > 0) {
-            newActiveWeek = weekNumbers[weekNumbers.length - 1];
-            console.log(`🔄 Using highest week as fallback: ${newActiveWeek}`);
-          }
-          
-          if (newActiveWeek) {
-            setActiveWeek(newActiveWeek);
-            console.log(`📅 FINAL active week: ${newActiveWeek}`);
-          }
+          const weeks = Array.from(new Set(sortedGames.map(g => g.week))).sort((a, b) => a - b);
+          const currentWeek = weeks.find(week =>
+            sortedGames.some(game => game.week === week && new Date(game.startTime).getTime() > Date.now())
+          ) ?? weeks[weeks.length - 1] ?? 1;
+          setActiveWeek(currentWeek);
         }
-        
+
         setLoading(false);
       } catch (err) {
         console.error("Error loading All Picks:", err);
@@ -1154,7 +1110,10 @@ const AllPicksPage = () => {
     };
 
     fetchData();
-  }, [userSelectedWeek]);
+    // Read newly stored ESPN scores while this page remains open.
+    const interval = setInterval(fetchData, 60_000);
+    return () => clearInterval(interval);
+  }, [userSelectedWeek, scoreRefreshVersion]);
 
   // Call cleanup when component mounts
   useEffect(() => {
@@ -1384,6 +1343,26 @@ const AllPicksPage = () => {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push("/login");
+  };
+
+  const refreshEspnScores = async () => {
+    if (!isAdmin || updatingScores) return;
+    setUpdatingScores(true);
+    try {
+      const { data: { session }, error } = await supabase.auth.getSession();
+      if (error || !session) throw new Error("Please log in again.");
+      const response = await fetch("/api/update-scores", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "Score update failed");
+      setScoreRefreshVersion(version => version + 1);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Score update failed");
+    } finally {
+      setUpdatingScores(false);
+    }
   };
 
   // Handle week selection
@@ -1687,6 +1666,13 @@ const AllPicksPage = () => {
           <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
             <h3 className="font-semibold text-yellow-800 mb-2">Admin: Weekly Winners</h3>
             <div className="flex flex-wrap gap-4 items-center">
+              <button
+                onClick={refreshEspnScores}
+                disabled={updatingScores}
+                className="bg-blue-600 text-white px-4 py-2 rounded font-semibold hover:bg-blue-700 disabled:bg-gray-400"
+              >
+                {updatingScores ? "Updating scores..." : "Update ESPN Scores"}
+              </button>
               <button
                 onClick={async () => {
                   if (confirm(`Store winners for Week ${activeWeek}? This will save paid and unpaid winners to the database.`)) {
