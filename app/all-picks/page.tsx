@@ -1115,12 +1115,15 @@ const AllPicksPage = () => {
     return () => clearInterval(interval);
   }, [userSelectedWeek, scoreRefreshVersion]);
 
-  // Call cleanup when component mounts
-  useEffect(() => {
-    if (games.length > 0 && profiles.length > 0 && picks.length > 0) {
-      cleanupIncorrectWinners();
-    }
-  }, [games, profiles, picks]);
+  // DISABLED: cleanupIncorrectWinners() could delete saved weekly winners.
+  // It reads picks without a season filter and Supabase caps results at 1,000
+  // rows, so 2026 picks get cut off and real winners look "wrong". Its delete
+  // also has no season filter. Do not re-enable.
+  // useEffect(() => {
+  //   if (games.length > 0 && profiles.length > 0 && picks.length > 0) {
+  //     cleanupIncorrectWinners();
+  //   }
+  // }, [games, profiles, picks]);
 
   // Refetch paid status when active week changes
   useEffect(() => {
