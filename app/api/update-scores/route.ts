@@ -1,16 +1,20 @@
 // app/api/update-scores/route.ts
 import { NextResponse } from "next/server";
 import axios from "axios";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 const DEFAULT_SEASON = 2026;
 
 // This route writes game scores. Keep the service role key on the server only.
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  { auth: { persistSession: false, autoRefreshToken: false } }
-);
+// The client is created on first use (not at import) so builds, including
+// Vercel preview builds, don't need the service role key.
+let adminClient: SupabaseClient | null = null;
+const db = () =>
+  (adminClient ??= createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { persistSession: false, autoRefreshToken: false } }
+  ));
 
 type Competitor = {
   homeAway: "home" | "away";
@@ -70,7 +74,7 @@ async function refreshWeek(season: number, week: number) {
     (game): game is NonNullable<typeof game> => game !== null
   );
   if (games.length === 0) throw new Error(`ESPN returned no games for week ${week}`);
-  const { error } = await supabase.from("games").upsert(games, { onConflict: "id" });
+  const { error } = await db().from("games").upsert(games, { onConflict: "id" });
   if (error) throw error;
   return { week, count: games.length };
 }
@@ -79,9 +83,9 @@ async function isAuthorized(request: Request) {
   const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) return false;
   if (process.env.CRON_SECRET && token === process.env.CRON_SECRET) return true;
-  const { data, error } = await supabase.auth.getUser(token);
+  const { data, error } = await db().auth.getUser(token);
   if (error || !data.user) return false;
-  const { data: profile, error: profileError } = await supabase.from("profiles")
+  const { data: profile, error: profileError } = await db().from("profiles")
     .select("is_admin").eq("user_id", data.user.id).single();
   return !profileError && profile?.is_admin === true;
 }
@@ -94,12 +98,12 @@ async function updateScores(request: Request) {
     if (!(await isAuthorized(request))) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const { data: config, error: configError } = await supabase
+    const { data: config, error: configError } = await db()
       .from("season_config").select("season_year, current_week").single();
     if (configError) throw configError;
     const season = config?.season_year ?? DEFAULT_SEASON;
 
-    const { data: schedule, error: scheduleError } = await supabase
+    const { data: schedule, error: scheduleError } = await db()
       .from("games").select("week, start_time").eq("season", season)
       .order("start_time", { ascending: true });
     if (scheduleError) throw scheduleError;
@@ -108,7 +112,7 @@ async function updateScores(request: Request) {
     if (games.length === 0) {
       // Populate the season once, then select the week from actual kickoff times.
       for (let week = 1; week <= 18; week++) await refreshWeek(season, week);
-      const { data, error } = await supabase.from("games").select("week, start_time")
+      const { data, error } = await db().from("games").select("week, start_time")
         .eq("season", season).order("start_time", { ascending: true });
       if (error) throw error;
       games = data ?? [];
@@ -137,7 +141,7 @@ async function updateScores(request: Request) {
     }
 
     if (config && config.current_week !== currentWeek) {
-      const { error } = await supabase.from("season_config")
+      const { error } = await db().from("season_config")
         .update({ current_week: currentWeek }).eq("season_year", season);
       if (error) throw error;
     }
