@@ -27,6 +27,8 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  /* Start content below the iPhone status bar (0 on other screens) */
+  padding-top: env(safe-area-inset-top);
 }
 
 /* Form fields: always dark text on white, even if the phone prefers dark */

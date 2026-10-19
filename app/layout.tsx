@@ -19,21 +19,27 @@ export const metadata: Metadata = {
   description: "Make your weekly NFL picks before they lock.",
   applicationName: "NFL Picks",
   icons: {
-    icon: "/icons/icon-192.png",
+    icon: [
+      { url: "/icons/favicon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
     apple: "/icons/apple-touch-icon.png",
   },
   appleWebApp: {
     capable: true,
     title: "NFL Picks",
-    statusBarStyle: "default",
+    // Draw under the iPhone status bar; the bar below keeps it steel blue
+    statusBarStyle: "black-translucent",
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0f172a",
+  themeColor: "#1e3a5f",
   colorScheme: "light",
   width: "device-width",
   initialScale: 1,
+  // Use the whole iPhone screen, including behind the notch and home bar
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -46,6 +52,8 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        {/* Steel-blue strip behind the iPhone status bar (zero height elsewhere) */}
+        <div aria-hidden className="fixed inset-x-0 top-0 z-[55] h-[env(safe-area-inset-top)] bg-ink" />
         {children}
         <BottomNav />
         <PwaSetup />

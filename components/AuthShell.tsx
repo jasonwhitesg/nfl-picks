@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import PicksLogo from "@/components/PicksLogo";
 
 // Shared look for the signed-out pages (login, signup, password reset)
 export default function AuthShell({
@@ -13,16 +14,19 @@ export default function AuthShell({
   footer?: ReactNode;
 }) {
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-ink px-4 py-10">
+    <div
+      className="relative flex min-h-dvh flex-col items-center justify-center overflow-hidden bg-ink px-4 pt-10"
+      style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 2.5rem)" }}
+    >
+      {/* Paint the whole screen (incl. iPhone bounce and home-bar areas) steel blue on these pages */}
+      <style>{`html, body { background: #1e3a5f; }`}</style>
       {/* Soft field-green glow behind the card */}
       <div className="pointer-events-none absolute -top-40 left-1/2 h-96 w-96 -translate-x-1/2 rounded-full bg-emerald-500/25 blur-3xl" />
       <div className="pointer-events-none absolute -bottom-40 right-0 h-80 w-80 rounded-full bg-sky-500/10 blur-3xl" />
 
       <div className="relative w-full max-w-sm">
         <div className="mb-6 text-center text-white">
-          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500 text-3xl shadow-lg shadow-emerald-500/30">
-            🏈
-          </div>
+          <PicksLogo className="mx-auto mb-3 h-20 w-20" />
           <div className="text-sm font-semibold uppercase tracking-widest text-emerald-300">NFL Picks</div>
           <h1 className="mt-1 text-3xl font-extrabold tracking-tight">{title}</h1>
           {subtitle && <p className="mt-1 text-sm text-slate-300">{subtitle}</p>}

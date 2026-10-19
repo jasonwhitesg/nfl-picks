@@ -1532,7 +1532,7 @@ const AllPicksPage = () => {
   return (
     <div className="min-h-screen bg-page">
       {/* Header */}
-      <header className="sticky top-0 z-50 bg-ink text-white shadow-md">
+      <header className="sticky top-[env(safe-area-inset-top)] z-50 bg-ink text-white shadow-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
           <div>
             <h1 className="text-lg font-extrabold leading-tight tracking-tight">All Picks</h1>

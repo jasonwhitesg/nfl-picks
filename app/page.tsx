@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import SplashScreen from "@/components/SplashScreen";
+import PicksLogo from "@/components/PicksLogo";
 import GroupInvites from "@/components/GroupInvites";
 import { splitMemberships } from "@/lib/groups";
 import { loadMemberships } from "@/lib/groupActions";
@@ -221,10 +222,10 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-page">
       {/* Header */}
-      <header className="sticky top-0 z-50 bg-ink text-white shadow-md">
+      <header className="sticky top-[env(safe-area-inset-top)] z-50 bg-ink text-white shadow-md">
         <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2">
-            <span className="text-2xl">🏈</span>
+            <PicksLogo className="h-9 w-9" />
             <div>
               <h1 className="text-lg font-extrabold leading-tight tracking-tight">
                 NFL Picks
