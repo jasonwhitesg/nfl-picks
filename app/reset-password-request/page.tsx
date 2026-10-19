@@ -1,31 +1,28 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
+import AuthShell, { authButton, authInput, authLabel, authLink } from "@/components/AuthShell";
 
 export default function ResetPasswordRequest() {
   const [email, setEmail] = useState("");
-  const [message, setMessage] = useState("");
+  const [sent, setSent] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setMessage("");
     setError("");
 
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: `${window.location.origin}/reset-password`,
       });
-
       if (error) setError(error.message);
-      else
-        setMessage(
-          "Password reset email sent! Check your inbox to continue."
-        );
-    } catch (err: any) {
+      else setSent(true);
+    } catch {
       setError("Unexpected error occurred. Please try again.");
     } finally {
       setLoading(false);
@@ -33,41 +30,54 @@ export default function ResetPasswordRequest() {
   };
 
   return (
-    <div className="flex justify-center items-center min-h-screen bg-gray-100">
-      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md border border-gray-300">
-        <h1 className="text-2xl font-bold mb-6 text-center text-gray-900">
-          Reset Password
-        </h1>
-
-        <form onSubmit={handleRequest} className="flex flex-col gap-4">
+    <AuthShell
+      title="Reset password"
+      subtitle="We'll email you a link to set a new one"
+      footer={
+        <>
+          Remembered it?{" "}
+          <Link href="/login" className={authLink}>
+            Back to sign in
+          </Link>
+        </>
+      }
+    >
+      {sent ? (
+        <div className="text-center">
+          <div className="text-4xl">📬</div>
+          <h2 className="mt-2 text-lg font-bold text-slate-900">Check your email</h2>
+          <p className="mt-1 text-sm text-slate-700">
+            If an account exists for <span className="font-semibold">{email}</span>, a reset link is on its way.
+          </p>
+          <button type="button" onClick={() => setSent(false)} className="mt-4 text-sm font-semibold text-sky-800 underline">
+            Use a different email
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={handleRequest} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-900 mb-1">
-              Enter your email
+            <label htmlFor="email" className={authLabel}>
+              Email
             </label>
             <input
+              id="email"
               type="email"
-              placeholder="your@email.com"
-              className="w-full p-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 placeholder:text-gray-500"
+              autoComplete="email"
+              placeholder="you@example.com"
+              className={authInput}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
             />
           </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 font-semibold disabled:bg-blue-400 disabled:cursor-not-allowed"
-          >
-            {loading ? "Sending..." : "Send Reset Link"}
-          </button>
+          {error && <p className="rounded-xl bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">{error}</p>}
 
-          {message && (
-            <p className="text-green-600 text-center mt-4">{message}</p>
-          )}
-          {error && <p className="text-red-600 text-center mt-4">{error}</p>}
+          <button type="submit" disabled={loading} className={authButton}>
+            {loading ? "Sending..." : "Send reset link"}
+          </button>
         </form>
-      </div>
-    </div>
+      )}
+    </AuthShell>
   );
 }

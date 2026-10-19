@@ -2,7 +2,9 @@
 
 import React, { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import Link from "next/link";
+import { useLiveScores } from "@/lib/useLiveScores";
+import { periodLabel } from "@/lib/espnLive";
+import GameDetailSheet from "@/components/GameDetailSheet";
 import { useRouter } from "next/navigation";
 
 type Game = {
@@ -81,9 +83,9 @@ const AllPicksPage = () => {
   const [updatingPaidStatus, setUpdatingPaidStatus] = useState<string | null>(null);
   const [hoveredUser, setHoveredUser] = useState<string | null>(null);
   const [hoveredGame, setHoveredGame] = useState<string | null>(null);
+  const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
   const [hoveredLockIndicator, setHoveredLockIndicator] = useState<string | null>(null);
   const [userSelectedWeek, setUserSelectedWeek] = useState<boolean>(false);
-  const [headerExpanded, setHeaderExpanded] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [storingWinners, setStoringWinners] = useState(false);
   const [updatingScores, setUpdatingScores] = useState(false);
@@ -1115,12 +1117,15 @@ const AllPicksPage = () => {
     return () => clearInterval(interval);
   }, [userSelectedWeek, scoreRefreshVersion]);
 
-  // Call cleanup when component mounts
-  useEffect(() => {
-    if (games.length > 0 && profiles.length > 0 && picks.length > 0) {
-      cleanupIncorrectWinners();
-    }
-  }, [games, profiles, picks]);
+  // DISABLED: cleanupIncorrectWinners() could delete saved weekly winners.
+  // It reads picks without a season filter and Supabase caps results at 1,000
+  // rows, so 2026 picks get cut off and real winners look "wrong". Its delete
+  // also has no season filter. Do not re-enable.
+  // useEffect(() => {
+  //   if (games.length > 0 && profiles.length > 0 && picks.length > 0) {
+  //     cleanupIncorrectWinners();
+  //   }
+  // }, [games, profiles, picks]);
 
   // Refetch paid status when active week changes
   useEffect(() => {
@@ -1496,392 +1501,209 @@ const AllPicksPage = () => {
     return `Week ${activeWeek} (Completed)`;
   };
 
-  // Navigation items
-  const navItems = [
-    { href: "/", label: "Home", icon: "🏠" },
-    { href: "/all-picks", label: "View All Picks", icon: "📊" },
-    { href: "/pick-summary", label: "Pick Percentages", icon: "📈" },
-    { href: "/standings", label: "Standings", icon: "🏆" },
-    { href: "/pickem-groups", label: "Pick'em Groups", icon: "👥" },
-    { href: "/rules", label: "Rules", icon: "📋" },
-    { href: "/profile", label: "Profile", icon: "👤" },
-  ];
+  // Live scores for the week on screen (and the game whose details are open)
+  const live = useLiveScores(seasonYear, activeWeek);
 
-  if (loading) return <div className="p-6 text-lg">Loading all picks...</div>;
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-page text-slate-600">
+        Loading all picks...
+      </div>
+    );
+  }
 
   const activeWeekGames = getActiveWeekGames();
   const sortedProfiles = getSortedProfiles();
+  const mondayNightGame = activeWeekGames.find((game: Game) => game.is_monday_night);
+  const mondayNightLocked = mondayNightGame ? isLocked(mondayNightGame.startTime) : false;
+  const mondayNightFinal = mondayNightGame?.status === "Final";
+  const finalCount = activeWeekGames.filter((g) => g.status === "Final").length;
+  const liveCount = activeWeekGames.filter((g) => g.status === "InProgress").length;
+
+  const sortArrow = (column: "percentage" | "name") =>
+    sortBy === column ? (sortOrder === "desc" ? " ↓" : " ↑") : "";
+
+  // Shared cell styles
+  const th = "whitespace-nowrap px-3 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500";
+  const td = "whitespace-nowrap px-3 py-2.5 text-center";
+  const tooltip =
+    "absolute left-1/2 top-full z-30 mt-2 -translate-x-1/2 whitespace-nowrap rounded-xl bg-slate-900 px-3 py-2 text-left text-xs font-normal normal-case tracking-normal text-white shadow-xl";
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Expandable Header Bar - Opens to the Left */}
-      <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
-        {/* Main Header Bar */}
-        <div className="flex items-center justify-between p-4">
-          <div className="flex items-center gap-4">
-            {/* Expand Button */}
-            <button
-              onClick={() => setHeaderExpanded(!headerExpanded)}
-              className="p-2 rounded-lg hover:bg-gray-200 transition-colors flex items-center gap-2 bg-gray-100 border border-gray-300"
-              title={headerExpanded ? "Collapse menu" : "Expand menu"}
-            >
-              <span className="text-xl text-gray-800">{headerExpanded ? "✕" : "☰"}</span>
-              <span className="font-semibold text-gray-800 hidden sm:block">
-                {headerExpanded ? "Close Menu" : "Menu"}
-              </span>
-            </button>
-
-            {/* Logo/Title */}
-            <h1 className="text-2xl font-bold text-gray-800">All Player Picks</h1>
+    <div className="min-h-screen bg-page">
+      {/* Header */}
+      <header className="sticky top-0 z-50 bg-ink text-white shadow-md">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
+          <div>
+            <h1 className="text-lg font-extrabold leading-tight tracking-tight">All Picks</h1>
+            <p className="text-xs text-slate-400">
+              Season {seasonYear}
+              {activeWeek ? ` · ${getCurrentWeekDisplay()}` : ""}
+            </p>
           </div>
-          
-          <div className="flex items-center gap-4">
-            {/* User Info */}
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold">
-                {userEmail?.charAt(0).toUpperCase()}
-              </div>
-              <div className="hidden md:block text-right">
-                <p className="text-sm font-medium text-gray-700">
-                  {userEmail}
-                </p>
-                <p className="text-xs text-gray-500">
-                  {isAdmin ? 'Admin' : 'User'}
-                </p>
-              </div>
+          <div className="flex items-center gap-3">
+            <div className="hidden text-right sm:block">
+              <p className="text-sm font-medium text-slate-200">{userEmail}</p>
+              <p className="text-xs text-slate-400">{isAdmin ? "Admin" : "Player"}</p>
             </div>
-
-            {/* Logout Button */}
-            <button
-              onClick={handleLogout}
-              className="bg-red-500 text-white px-3 py-2 rounded text-sm font-medium hover:bg-red-600 transition-colors"
-            >
-              Logout
-            </button>
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500 font-bold text-white">
+              {userEmail?.charAt(0).toUpperCase()}
+            </div>
           </div>
         </div>
-
-        {/* Expandable Navigation Panel - Opens to the Left */}
-        {headerExpanded && (
-          <div className="absolute top-full left-0 w-80 bg-white border-b border-r border-gray-200 shadow-lg z-40">
-            <div className="p-6">
-              {/* Navigation Header */}
-              <div className="mb-6">
-                <h2 className="text-xl font-bold text-gray-800 mb-2">Navigation</h2>
-                <p className="text-sm text-gray-600">Quick access to all features</p>
-              </div>
-
-              {/* Navigation Grid */}
-              <div className="grid grid-cols-1 gap-3">
-                {navItems.map((item) => (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className="flex items-center gap-4 p-4 rounded-lg bg-gray-50 hover:bg-blue-50 hover:text-blue-700 transition-all duration-200 group border border-gray-200 hover:border-blue-200"
-                    onClick={() => setHeaderExpanded(false)}
-                  >
-                    <span className="text-2xl group-hover:scale-110 transition-transform">
-                      {item.icon}
-                    </span>
-                    <div className="flex-1">
-                      <div className="font-semibold text-gray-800 group-hover:text-blue-800">
-                        {item.label}
-                      </div>
-                      <div className="text-xs text-gray-500 group-hover:text-blue-600 mt-1">
-                        Click to navigate
-                      </div>
-                    </div>
-                    <span className="text-gray-400 group-hover:text-blue-500 transition-colors">
-                      →
-                    </span>
-                  </Link>
-                ))}
-              </div>
-
-              {/* Quick Stats */}
-              <div className="mt-6 pt-6 border-t border-gray-200">
-                <h3 className="font-semibold text-gray-800 mb-3">Current Week Stats</h3>
-                <div className="grid grid-cols-3 gap-3 text-center">
-                  <div className="bg-blue-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-blue-600">
-                      {activeWeek ? activeWeekGames.length : 0}
-                    </div>
-                    <div className="text-xs text-blue-800">Games</div>
-                  </div>
-                  <div className="bg-green-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-green-600">
-                      {sortedProfiles.length}
-                    </div>
-                    <div className="text-xs text-green-800">Players</div>
-                  </div>
-                  <div className="bg-purple-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-purple-600">{activeWeek || 1}</div>
-                    <div className="text-xs text-purple-800">Week</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Admin Badge */}
-              {isAdmin && (
-                <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <span className="text-yellow-600">🔧</span>
-                    <span className="text-sm font-semibold text-yellow-800">Admin Mode Active</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
       </header>
 
-      {/* Main Content */}
-      <main className="p-6">
-        {/* Admin badge */}
-        {isAdmin && (
-          <div className="mb-4 p-2 bg-yellow-100 border border-yellow-400 rounded-lg inline-block">
-            <span className="text-yellow-800 font-semibold">🔧 Admin Mode</span>
-          </div>
-        )}
-
-        {/* Current Week Display */}
-        {activeWeek && (
-          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-            <h2 className="text-xl font-semibold text-blue-800">
-              {getCurrentWeekDisplay()}
-            </h2>
-            <p className="text-sm text-blue-600 mt-1">
-              Showing {sortedProfiles.length} players who made picks for this week
-            </p>
-            {activeWeek === 18 && (
-              <p className="text-xs text-green-600 mt-1">
-                ✅ Week 18 data fix applied - All users with picks are shown from database query
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* Admin Winner Controls */}
-        {isAdmin && activeWeek && (
-          <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-            <h3 className="font-semibold text-yellow-800 mb-2">Admin: Weekly Winners</h3>
-            <div className="flex flex-wrap gap-4 items-center">
-              <button
-                onClick={refreshEspnScores}
-                disabled={updatingScores}
-                className="bg-blue-600 text-white px-4 py-2 rounded font-semibold hover:bg-blue-700 disabled:bg-gray-400"
-              >
-                {updatingScores ? "Updating scores..." : "Update ESPN Scores"}
-              </button>
-              <button
-                onClick={async () => {
-                  if (confirm(`Store winners for Week ${activeWeek}? This will save paid and unpaid winners to the database.`)) {
-                    const result = await storeWeeklyWinners(activeWeek);
-                    if (result.success) {
-                      alert(`✅ Winners stored successfully for Week ${activeWeek}!`);
-                    } else {
-                      alert(`❌ Failed to store winners: ${result.message}`);
-                    }
-                  }
-                }}
-                disabled={storingWinners}
-                className="bg-green-500 text-white px-4 py-2 rounded font-semibold hover:bg-green-600 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
-              >
-                {storingWinners ? '💾 Storing...' : '💾 Store Winners for Week ' + activeWeek}
-              </button>
-              
-              <div className="text-sm text-yellow-700">
-                Paid Winners: {bestPerformers.paidMostCorrect.length} | 
-                Unpaid Winners: {bestPerformers.unpaidMostCorrect.length}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Week tabs */}
-        <div className="flex gap-2 mb-6 overflow-x-auto">
+      <main className="mx-auto max-w-7xl px-4 py-5">
+        {/* Week selector */}
+        <div className="-mx-4 mb-5 flex gap-2 overflow-x-auto px-4 pb-1">
           {Object.keys(gamesByWeek).map((week) => {
             const weekNum = Number(week);
             const weekGames = gamesByWeek[weekNum] || [];
-            const hasUpcomingGames = weekGames.some(game => new Date(game.startTime) > now);
-            const hasLiveGames = weekGames.some(game => game.status === "InProgress");
-            const isCurrentWeek = activeWeek === weekNum;
-            
+            const hasUpcomingGames = weekGames.some((game) => new Date(game.startTime) > now);
+            const hasLiveGames = weekGames.some((game) => game.status === "InProgress");
+            const selected = activeWeek === weekNum;
+
             return (
               <button
                 key={week}
                 onClick={() => handleWeekSelect(weekNum)}
-                className={`px-4 py-2 rounded font-semibold transition-colors min-w-[100px] ${
-                  isCurrentWeek 
-                    ? "bg-blue-600 text-white border-2 border-blue-700" 
-                    : hasLiveGames
-                      ? "bg-green-600 text-white border border-green-700 hover:bg-green-700"
-                      : hasUpcomingGames 
-                        ? "bg-green-100 text-green-800 border border-green-300 hover:bg-green-200"
-                        : "bg-gray-100 text-gray-700 border border-gray-300 hover:bg-gray-200"
+                className={`flex shrink-0 items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
+                  selected
+                    ? "bg-emerald-600 text-white shadow-sm"
+                    : "border border-slate-200 bg-white text-slate-600 hover:border-emerald-300 hover:text-slate-900"
                 }`}
               >
                 Week {week}
-                {hasLiveGames && " 🔴"}
-                {hasUpcomingGames && !hasLiveGames && " ⏱️"}
+                {hasLiveGames ? (
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-rose-500" title="Live" />
+                ) : hasUpcomingGames ? (
+                  <span className={`h-2 w-2 rounded-full ${selected ? "bg-white/70" : "bg-sky-400"}`} title="Upcoming" />
+                ) : null}
               </button>
             );
           })}
         </div>
 
+        {/* Quick stats */}
+        {activeWeek && (
+          <div className="mb-5 grid grid-cols-3 gap-3">
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="text-2xl font-extrabold text-slate-800">{sortedProfiles.length}</div>
+              <div className="text-xs font-medium text-slate-500">Players</div>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="text-2xl font-extrabold text-slate-800">
+                {finalCount}
+                <span className="text-base font-semibold text-slate-400">/{activeWeekGames.length}</span>
+              </div>
+              <div className="text-xs font-medium text-slate-500">Games final</div>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+              <div className={`text-2xl font-extrabold ${liveCount > 0 ? "text-rose-600" : "text-slate-800"}`}>
+                {liveCount}
+              </div>
+              <div className="text-xs font-medium text-slate-500">Live now</div>
+            </div>
+          </div>
+        )}
+
         {activeWeek && activeWeekGames.length > 0 ? (
-          <div className="border border-gray-300 rounded-lg">
-            {/* Table container with max height and scrolling */}
-            <div className="overflow-x-auto max-h-[80vh] overflow-y-auto">
-              <table className="table-auto border-collapse w-full text-center">
-                <thead className="sticky top-0 bg-gray-100 z-10">
-                  <tr>
-                    {/* Paid Column - NOT Sticky */}
-                    <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-yellow-100">
-                      Paid
-                      {isAdmin && (
-                        <div className="text-xs font-normal text-gray-600 mt-1">
-                          (Click to edit)
-                        </div>
-                      )}
-                    </th>
-                    
-                    {/* Player Column - Sticky */}
-                    <th className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0 left-0 z-20 bg-gray-100">
-                      <button 
-                        onClick={() => handleSortClick('name')}
-                        className="hover:bg-gray-200 px-2 py-1 rounded transition-colors flex items-center gap-1 mx-auto"
-                      >
-                        Player
-                        {sortBy === 'name' && (
-                          <span className="text-xs">
-                            {sortOrder === 'desc' ? '↓' : '↑'}
-                          </span>
-                        )}
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="max-h-[75vh] overflow-auto">
+              <table className="w-full border-separate border-spacing-0 text-sm">
+                <thead className="sticky top-0 z-20">
+                  <tr className="bg-slate-50">
+                    <th className={`${th} sticky left-0 z-30 border-b border-slate-200 bg-slate-50 text-left`}>
+                      <button onClick={() => handleSortClick("name")} className="uppercase hover:text-slate-900">
+                        Player{sortArrow("name")}
                       </button>
                     </th>
-                    
-                    {/* Correct Column - NOT Sticky */}
-                    <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-gray-100">Correct</th>
-                    
-                    {/* Percentage Column - NOT Sticky */}
-                    <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-gray-100">
-                      <button 
-                        onClick={() => handleSortClick('percentage')}
-                        className="hover:bg-gray-200 px-2 py-1 rounded transition-colors flex items-center gap-1 mx-auto"
-                      >
-                        %
-                        {sortBy === 'percentage' && (
-                          <span className="text-xs">
-                            {sortOrder === 'desc' ? '↓' : '↑'}
-                          </span>
-                        )}
+                    <th className={`${th} border-b border-slate-200 bg-slate-50`}>
+                      <button onClick={() => handleSortClick("percentage")} className="uppercase hover:text-slate-900">
+                        Score{sortArrow("percentage")}
                       </button>
                     </th>
-                    
-                    {/* Game columns - Scroll horizontally */}
-                    {activeWeekGames.map((game) => (
-                      <th 
-                        key={game.id} 
-                        className="border border-gray-300 p-3 font-bold text-gray-800 sticky top-0 bg-gray-100 relative"
-                        onMouseEnter={() => setHoveredGame(game.id)}
-                        onMouseLeave={() => setHoveredGame(null)}
-                        onTouchStart={() => setHoveredGame(game.id)}
-                      >
-                        <div className="cursor-help">
-                          {formatGameLabel(game)}
-                        </div>
-                        
-                        {/* Hover/Touch Tooltip for Game Info */}
-                        {(hoveredGame === game.id) && (
-                          <div className="absolute left-1/2 transform -translate-x-1/2 bottom-full mb-2 z-30 bg-gray-800 text-white text-sm px-3 py-2 rounded-lg shadow-lg whitespace-nowrap">
-                            <div className="font-semibold">
-                              {formatGameLabel(game)}
-                            </div>
-                            <div className="text-xs text-gray-300 mt-1">
-                              {formatTime(game.startTime)} MST
-                            </div>
-                            <div className="text-xs text-red-300 mt-1 font-bold">
-                              {getLockMessage(new Date(game.startTime), game.id)}
-                            </div>
-                            <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-800"></div>
-                          </div>
-                        )}
-                      </th>
-                    ))}
-                    
-                    {/* MNF columns - Scroll horizontally */}
-                    <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-purple-100 sticky top-0">MNF Pick</th>
-                    <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-purple-100 sticky top-0">Actual Total</th>
-                    <th className="border border-gray-300 p-3 font-bold text-gray-800 bg-purple-100 sticky top-0">Difference</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {/* Locked row */}
-                  <tr className="bg-gray-200">
-                    {/* Paid Column - NOT Sticky */}
-                    <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-yellow-50">
-                      -
-                    </td>
-                    
-                    {/* Player Column - Sticky */}
-                    <td className="border border-gray-300 p-3 font-semibold text-gray-800 sticky left-0 z-10 bg-gray-200">-</td>
-                    
-                    {/* Correct Column - NOT Sticky */}
-                    <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-gray-200">-</td>
-                    
-                    {/* Percentage Column - NOT Sticky */}
-                    <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-gray-200">-</td>
-                    
-                    {/* Game columns */}
+                    <th className={`${th} border-b border-slate-200 bg-slate-50`}>Paid</th>
+
                     {activeWeekGames.map((game) => {
                       const locked = isLocked(game.startTime);
+                      const liveGame = live[game.id];
+                      const isLive = liveGame ? liveGame.state === "in" : game.status === "InProgress";
+                      const isFinal = liveGame ? liveGame.state === "post" : game.status === "Final";
+                      const awayScore = liveGame?.away.score ?? game.away_score;
+                      const homeScore = liveGame?.home.score ?? game.home_score;
                       return (
-                        <td 
-                          key={game.id} 
-                          className="border border-gray-300 p-3 text-center relative"
-                          onMouseEnter={() => setHoveredLockIndicator(game.id)}
-                          onMouseLeave={() => setHoveredLockIndicator(null)}
-                          onTouchStart={() => setHoveredLockIndicator(game.id)}
+                        <th
+                          key={game.id}
+                          className={`${th} relative cursor-pointer border-b border-slate-200 bg-slate-50 hover:bg-slate-100 ${
+                            game.is_monday_night ? "bg-indigo-50" : ""
+                          }`}
+                          onMouseEnter={() => setHoveredGame(game.id)}
+                          onMouseLeave={() => setHoveredGame(null)}
+                          onClick={() => {
+                            setHoveredGame(null);
+                            setSelectedGameId(game.id);
+                          }}
                         >
-                          <div className="flex flex-col items-center justify-center">
+                          <div className="flex flex-col items-center gap-1">
+                            <span className="text-[11px] font-bold normal-case tracking-normal text-slate-700">
+                              {game.awayTeam}
+                              <span className="font-normal text-slate-400"> @ </span>
+                              {game.homeTeam}
+                            </span>
                             <span
-                              className={`inline-block w-4 h-4 rounded-full ${
-                                locked ? "bg-red-600" : "bg-green-500"
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-bold tabular-nums ${
+                                isFinal
+                                  ? "bg-slate-200 text-slate-700"
+                                  : isLive
+                                  ? "bg-rose-100 text-rose-700"
+                                  : locked
+                                  ? "bg-amber-100 text-amber-800"
+                                  : "bg-emerald-100 text-emerald-800"
                               }`}
-                              title={locked ? "Game started / Pick locked" : "Pick available"}
-                            ></span>
-                            {locked && (
-                              <div className="text-xs text-gray-600 mt-1">LOCKED</div>
+                            >
+                              {isFinal
+                                ? homeScore != null && awayScore != null
+                                  ? `${awayScore}–${homeScore}`
+                                  : "FINAL"
+                                : isLive
+                                ? awayScore != null && homeScore != null
+                                  ? `${awayScore}–${homeScore}`
+                                  : "LIVE"
+                                : locked
+                                ? "LOCKED"
+                                : "OPEN"}
+                            </span>
+                            {isLive && liveGame && (
+                              <span className="text-[10px] font-bold normal-case tracking-normal text-rose-700">
+                                {periodLabel(liveGame.period)} {liveGame.clock}
+                              </span>
+                            )}
+                            {game.is_monday_night && (
+                              <span className="text-[10px] font-bold text-indigo-600">MNF</span>
                             )}
                           </div>
-                          
-                          {/* Hover/Touch Tooltip for Lock Indicator */}
-                          {(hoveredLockIndicator === game.id) && (
-                            <div className="absolute left-1/2 transform -translate-x-1/2 bottom-full mb-2 z-30 bg-gray-800 text-white text-sm px-3 py-2 rounded-lg shadow-lg whitespace-nowrap">
-                              <div className="font-semibold">
-                                {formatGameLabel(game)}
-                              </div>
-                              <div className="text-xs text-gray-300 mt-1">
-                                {formatTime(game.startTime)} MST
-                              </div>
-                              <div className="text-xs text-red-300 mt-1 font-bold">
+
+                          {hoveredGame === game.id && (
+                            <div className={tooltip}>
+                              <div className="font-semibold">{formatGameLabel(game)}</div>
+                              <div className="mt-1 text-slate-300">{formatTime(game.startTime)} MT</div>
+                              <div className="mt-1 font-semibold text-amber-300">
                                 {getLockMessage(new Date(game.startTime), game.id)}
                               </div>
-                              <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-800"></div>
                             </div>
                           )}
-                        </td>
+                        </th>
                       );
                     })}
-                    
-                    {/* MNF columns */}
-                    <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">-</td>
-                    <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">-</td>
-                    <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">-</td>
-                  </tr>
 
-                  {/* Player picks - ALL users who made picks */}
+                    <th className={`${th} border-b border-slate-200 bg-indigo-50 text-indigo-700`}>MNF Guess</th>
+                    <th className={`${th} border-b border-slate-200 bg-indigo-50 text-indigo-700`}>Actual</th>
+                    <th className={`${th} border-b border-slate-200 bg-indigo-50 text-indigo-700`}>Diff</th>
+                  </tr>
+                </thead>
+
+                <tbody>
                   {sortedProfiles.map((user) => {
                     const stats = userStats[user.user_id] || {
                       correctPicks: 0,
@@ -1889,51 +1711,68 @@ const AllPicksPage = () => {
                       percentage: 0,
                       mondayNightPick: null,
                       actualMondayTotal: null,
-                      mondayNightDifference: null
+                      mondayNightDifference: null,
                     };
 
                     const userPaidStatus = paidStatus[user.user_id] || false;
-                    
-                    // Determine winner status
-                    const isPaidMostCorrect = bestPerformers.paidMostCorrect.includes(user.user_id);
-                    const isUnpaidMostCorrect = bestPerformers.unpaidMostCorrect.includes(user.user_id);
+                    const isPaidWinner = bestPerformers.paidMostCorrect.includes(user.user_id);
+                    const isUnpaidWinner = bestPerformers.unpaidMostCorrect.includes(user.user_id);
 
-                    const isWinner = isPaidMostCorrect || isUnpaidMostCorrect;
-                    const isPaidWinner = isPaidMostCorrect;
-                    const isUnpaidWinner = isUnpaidMostCorrect;
-
-                    const mondayNightGame = activeWeekGames.find((game: Game) => game.is_monday_night);
-                    const mondayNightLocked = mondayNightGame ? isLocked(mondayNightGame.startTime) : false;
-                    const mondayNightFinal = mondayNightGame?.status === "Final";
-
-                    // Determine background colors based on winner status
-                    const getWinnerBackgroundColor = () => {
-                      if (isPaidWinner) return "bg-green-100 border-green-300";
-                      if (isUnpaidWinner) return "bg-orange-100 border-orange-300";
-                      return "";
-                    };
-
-                    const getWinnerTextColor = () => {
-                      if (isPaidWinner) return "text-green-900";
-                      if (isUnpaidWinner) return "text-orange-900";
-                      return "text-gray-800";
-                    };
+                    // Row tint: winners get a soft highlight, everyone else plain white
+                    const rowBg = isPaidWinner ? "bg-emerald-50" : isUnpaidWinner ? "bg-amber-50" : "bg-white";
+                    const cell = `${td} border-b border-slate-100 ${rowBg}`;
+                    const userPicks = getUserPicksForActiveWeek(user.user_id);
 
                     return (
-                      <tr key={user.user_id} className={`hover:bg-gray-50 ${isWinner ? getWinnerBackgroundColor() : ''}`}>
-                        {/* Paid Column - NOT Sticky */}
-                        <td 
-                          className={`border border-gray-300 p-3 text-center font-semibold ${
-                            isWinner ? getWinnerBackgroundColor() + ' ' + getWinnerTextColor() : 'bg-yellow-50'
-                          } ${
-                            isAdmin && !updatingPaidStatus ? 'cursor-pointer hover:opacity-80 transition-colors' : ''
+                      <tr key={user.user_id} className="group">
+                        {/* Player (sticky) */}
+                        <td
+                          className={`${cell} sticky left-0 ${hoveredUser === user.user_id ? "z-40" : "z-10"} text-left ${
+                            isPaidWinner
+                              ? "border-l-4 border-l-emerald-500"
+                              : isUnpaidWinner
+                              ? "border-l-4 border-l-amber-400"
+                              : "border-l-4 border-l-transparent"
                           }`}
+                          onMouseEnter={() => setHoveredUser(user.user_id)}
+                          onMouseLeave={() => setHoveredUser(null)}
+                          onTouchStart={() => setHoveredUser(user.user_id)}
+                        >
+                          <div className="relative">
+                            <div className="font-bold text-slate-800">{user.username}</div>
+                            {isPaidWinner && (
+                              <div className="text-[11px] font-semibold text-emerald-700">🏆 Weekly winner</div>
+                            )}
+                            {isUnpaidWinner && (
+                              <div className="text-[11px] font-semibold text-amber-700">Would have won (unpaid)</div>
+                            )}
+                            {hoveredUser === user.user_id && (
+                              <div className="absolute left-0 top-full z-30 mt-2 whitespace-nowrap rounded-xl bg-slate-900 px-3 py-2 text-left text-xs font-normal text-white shadow-xl">
+                                <div className="font-semibold">
+                                  {user.first_name} {user.last_name}
+                                </div>
+                                <div className="mt-1 text-slate-300">{user.email}</div>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Score */}
+                        <td className={cell}>
+                          <div className="font-bold text-slate-800">
+                            {stats.correctPicks}
+                            <span className="font-normal text-slate-400">/{stats.totalPicks}</span>
+                          </div>
+                          <div className="text-[11px] text-slate-500">{stats.percentage}%</div>
+                        </td>
+
+                        {/* Paid */}
+                        <td
+                          className={`${cell} ${isAdmin && !updatingPaidStatus ? "cursor-pointer" : ""}`}
                           onClick={() => isAdmin && !updatingPaidStatus && setEditingPaidStatus(user.user_id)}
                         >
                           {updatingPaidStatus === user.user_id ? (
-                            <div className="flex items-center justify-center">
-                              <span className="text-gray-500">Updating...</span>
-                            </div>
+                            <span className="text-xs text-slate-400">Saving...</span>
                           ) : editingPaidStatus === user.user_id ? (
                             <div className="flex flex-col gap-1">
                               <button
@@ -1941,138 +1780,63 @@ const AllPicksPage = () => {
                                   e.stopPropagation();
                                   togglePaidStatus(user.user_id);
                                 }}
-                                className={`px-2 py-1 rounded text-white text-sm ${
-                                  userPaidStatus ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'
+                                className={`rounded-lg px-2 py-1 text-xs font-semibold text-white ${
+                                  userPaidStatus ? "bg-rose-500 hover:bg-rose-600" : "bg-emerald-600 hover:bg-emerald-700"
                                 }`}
                               >
-                                {userPaidStatus ? 'Mark Unpaid' : 'Mark Paid'}
+                                {userPaidStatus ? "Mark unpaid" : "Mark paid"}
                               </button>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   setEditingPaidStatus(null);
                                 }}
-                                className="px-2 py-1 bg-gray-500 text-white rounded text-sm hover:bg-gray-600"
+                                className="rounded-lg bg-slate-200 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-300"
                               >
                                 Cancel
                               </button>
                             </div>
                           ) : (
-                            <div className="flex items-center justify-center gap-2">
-                              {userPaidStatus ? (
-                                <span className="text-green-600 text-xl" title="Paid">✓</span>
-                              ) : (
-                                <span className="text-red-500 text-xl" title="Not Paid">✗</span>
-                              )}
-                              {isAdmin && !updatingPaidStatus && (
-                                <span className="text-xs text-gray-500">Click to edit</span>
-                              )}
-                            </div>
+                            <span
+                              className={`inline-block rounded-full px-2.5 py-0.5 text-[11px] font-bold ${
+                                userPaidStatus ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
+                              } ${isAdmin ? "group-hover:ring-2 group-hover:ring-amber-300" : ""}`}
+                            >
+                              {userPaidStatus ? "PAID" : "UNPAID"}
+                            </span>
                           )}
                         </td>
 
-                        {/* Player name with hover/touch functionality - Sticky */}
-                        <td 
-                          className={`border border-gray-300 p-3 font-semibold relative sticky left-0 z-10 ${
-                            isWinner ? getWinnerBackgroundColor() : 'bg-gray-50'
-                          } text-gray-900`}
-                          onMouseEnter={() => setHoveredUser(user.user_id)}
-                          onMouseLeave={() => setHoveredUser(null)}
-                          onTouchStart={() => setHoveredUser(user.user_id)}
-                        >
-                          <div className="cursor-default">
-                            <span className="text-gray-900 font-bold">{user.username}</span>
-                            {isPaidWinner && <div className="text-xs text-green-700 mt-1">🏆 Most Correct (Paid Winner)</div>}
-                            {isUnpaidWinner && <div className="text-xs text-orange-700 mt-1">🥈 Most Correct (Would Have Won)</div>}
-                          </div>
-                          
-                          {/* Hover/Touch Tooltip */}
-                          {(hoveredUser === user.user_id) && (
-                            <div className="absolute left-1/2 transform -translate-x-1/2 bottom-full mb-2 z-30 bg-gray-800 text-white text-sm px-3 py-2 rounded-lg shadow-lg whitespace-nowrap">
-                              <div className="font-semibold">
-                                {user.first_name} {user.last_name}
-                              </div>
-                              <div className="text-xs text-gray-300 mt-1">
-                                {user.email}
-                              </div>
-                              <div className="text-xs text-gray-300 mt-1">
-                                {userPaidStatus ? "Paid ✅" : "Not Paid ❌"}
-                              </div>
-                              <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-gray-800"></div>
-                            </div>
-                          )}
-                        </td>
-
-                        {/* Correct picks - NOT Sticky */}
-                          <td className={`border border-gray-300 p-3 font-semibold ${
-                            isWinner ? getWinnerBackgroundColor() : 'bg-blue-50'
-                          } text-gray-900`}>
-                            {stats.correctPicks}/{stats.totalPicks}
-                          </td>
-
-                          {/* Percentage - NOT Sticky */}
-                          <td className={`border border-gray-300 p-3 font-semibold ${
-                            isWinner ? getWinnerBackgroundColor() : 'bg-blue-50'
-                          } text-gray-900`}>
-                            {stats.percentage}%
-                          </td>
-
-                        {/* Game picks - Scroll horizontally */}
+                        {/* Game picks */}
                         {activeWeekGames.map((game: Game) => {
                           const locked = isLocked(game.startTime);
-                          const userPick = getUserPicksForActiveWeek(user.user_id).find(
-                            (p) => p.game_id === game.id
-                          );
-                          
-                          const showPick = locked;
-                          const displayPick = showPick ? (userPick?.selected_team ?? "") : "❓";
-                          
-                          const isCorrect = game.status === "Final" && 
-                                          userPick?.selected_team === game.winner;
-                          
+                          const userPick = userPicks.find((p) => p.game_id === game.id);
+                          const isFinal = game.status === "Final";
+                          const isCorrect = isFinal && userPick?.selected_team === game.winner;
+
+                          let pill = "bg-slate-100 text-slate-700"; // locked, game not finished
+                          if (!locked) pill = "bg-transparent text-slate-300";
+                          else if (!userPick) pill = "bg-transparent text-slate-300";
+                          else if (isFinal) pill = isCorrect ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-700 line-through decoration-rose-300";
+
                           return (
-                            <td
-                              key={game.id}
-                              className={`border border-gray-300 p-3 text-center font-medium ${
-                                showPick 
-                                  ? userPick 
-                                    ? isCorrect
-                                      ? "bg-green-100 text-green-900 border border-green-200"
-                                      : "bg-red-100 text-red-900 border border-red-200"
-                                    : "bg-red-100 text-red-900 border border-red-200"
-                                  : "bg-gray-100 text-gray-600 border border-gray-200"
-                              } ${isWinner ? getWinnerBackgroundColor() : ''}`}
-                            >
-                              {displayPick}
-                              {game.is_monday_night && locked && userPick?.total_points !== null && userPick?.total_points !== undefined && (
-                                <div className="text-xs text-purple-600 mt-1">
-                                  Total: {userPick.total_points}
-                                </div>
-                              )}
+                            <td key={game.id} className={`${cell} ${game.is_monday_night && rowBg === "bg-white" ? "bg-indigo-50/40" : ""}`}>
+                              <span className={`inline-block min-w-[3rem] rounded-lg px-2 py-1 text-xs font-bold ${pill}`}>
+                                {!locked ? "🔒" : userPick?.selected_team ?? "—"}
+                              </span>
                             </td>
                           );
                         })}
 
-                        {/* Monday night pick column */}
-                        <td className={`border border-gray-300 p-3 font-semibold ${
-                          isWinner ? getWinnerBackgroundColor() : 'bg-purple-50'
-                        } text-gray-900`}>
-                          {mondayNightLocked 
-                            ? (stats.mondayNightPick !== null ? stats.mondayNightPick : "-") 
-                            : "❓"
-                          }
+                        {/* Monday Night */}
+                        <td className={`${cell} font-semibold text-slate-700`}>
+                          {mondayNightLocked ? stats.mondayNightPick ?? "—" : "🔒"}
                         </td>
-
-                        {/* Actual total column */}
-                        <td className="border border-gray-300 p-3 font-semibold text-gray-800 bg-purple-50">
-                          {mondayNightFinal && stats.actualMondayTotal !== null ? stats.actualMondayTotal : "-"}
+                        <td className={`${cell} text-slate-500`}>
+                          {mondayNightFinal && stats.actualMondayTotal !== null ? stats.actualMondayTotal : "—"}
                         </td>
-
-                        {/* Difference column */}
-                        <td className={`border border-gray-300 p-3 font-semibold ${
-                          isWinner ? getWinnerBackgroundColor() : 'bg-purple-50'
-                        } text-gray-900`}>
-                          {mondayNightFinal && stats.mondayNightDifference !== null ? stats.mondayNightDifference : "-"}
+                        <td className={`${cell} font-semibold text-slate-700`}>
+                          {mondayNightFinal && stats.mondayNightDifference !== null ? stats.mondayNightDifference : "—"}
                         </td>
                       </tr>
                     );
@@ -2082,136 +1846,84 @@ const AllPicksPage = () => {
             </div>
           </div>
         ) : (
-          <div className="text-center p-8 bg-gray-100 border border-gray-300 rounded-lg">
-            <p className="text-lg text-gray-600">No games found for the selected week.</p>
+          <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-slate-500">
+            No games found for the selected week.
           </div>
         )}
 
-        {/* Enhanced Legend/How It Works Section */}
-        <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-          <h3 className="font-semibold text-blue-900 mb-3 text-lg">📖 How It Works - Pick Tracking System</h3>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
-            {/* Game Status Section */}
-            <div className="bg-white p-3 rounded border">
-              <h4 className="font-bold text-gray-800 mb-2">🎮 Game Status</h4>
-              <div className="space-y-2 text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="inline-block w-4 h-4 rounded-full bg-green-500 border border-green-600"></span>
-                  <span>Game hasn't started - Pick still open</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="inline-block w-4 h-4 rounded-full bg-red-600 border border-red-700"></span>
-                  <span>Game started - Pick locked</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-gray-600 text-xl">❓</span>
-                  <span>Pick hidden until game starts</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="bg-green-100 text-green-900 px-2 py-1 rounded border">Team</span>
-                  <span>Correct pick (green background)</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="bg-red-100 text-red-900 px-2 py-1 rounded border">Team</span>
-                  <span>Incorrect pick (red background)</span>
-                </div>
-              </div>
-            </div>
-            
-            {/* Player Status Section */}
-            <div className="bg-white p-3 rounded border">
-              <h4 className="font-bold text-gray-800 mb-2">👥 Player Status</h4>
-              <div className="space-y-2 text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="text-green-600 text-xl">✓</span>
-                  <span>Player has paid for this week</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-red-500 text-xl">✗</span>
-                  <span>Player hasn't paid for this week</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="bg-green-100 text-green-900 px-2 py-1 rounded border">🏆</span>
-                  <span>Most correct picks (Paid winner)</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="bg-orange-100 text-orange-900 px-2 py-1 rounded border">🥈</span>
-                  <span>Would have won (Unpaid winner)</span>
-                </div>
-                {isAdmin && (
-                  <div className="flex items-center gap-2">
-                    <span className="bg-yellow-100 text-yellow-900 px-2 py-1 rounded border">Click</span>
-                    <span>Admin: Click paid status to edit</span>
-                  </div>
-                )}
-              </div>
-            </div>
-            
-            {/* MNF Section */}
-            <div className="bg-white p-3 rounded border">
-              <h4 className="font-bold text-gray-800 mb-2">🌙 Monday Night Football</h4>
-              <div className="space-y-2 text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="bg-purple-100 text-purple-900 px-2 py-1 rounded border">MNF</span>
-                  <span>Monday Night Football game</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-purple-600 text-xs">Total: XX</span>
-                  <span>Predicted total points (shown when final)</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-purple-600">Diff: XX</span>
-                  <span>Difference between prediction and actual</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          {/* Week Lock Rules */}
-          <div className="bg-white p-3 rounded border mb-4">
-            <h4 className="font-bold text-gray-800 mb-2">⏰ Weekly Lock Rules</h4>
-            <div className="text-sm space-y-1">
-              <p><strong>Thursday/Friday/Saturday games:</strong> Lock at their individual start times</p>
-              <p><strong>Sunday games BEFORE 2:00 PM MST:</strong> Lock at their individual start times</p>
-              <p><strong>Sunday games AT/AFTER 2:00 PM MST:</strong> All lock when the earliest Sunday 2:00 PM game starts</p>
-              <p><strong>Monday Night Football:</strong> Locks when the earliest Sunday 2:00 PM game starts</p>
-              <p className="text-xs text-gray-600 mt-2">Hover over game headers or lock indicators for specific countdowns</p>
-            </div>
-          </div>
-          
-          {/* Interactive Features */}
-          <div className="bg-white p-3 rounded border">
-            <h4 className="font-bold text-gray-800 mb-2">🖱️ Interactive Features</h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-              <div>
-                <p><strong>Hover/Click Game Headers:</strong> See game time and lock rules</p>
-                <p><strong>Hover/Click Player Names:</strong> See user's full name and email</p>
-              </div>
-              <div>
-                <p><strong>Hover Lock Indicators:</strong> See countdown or lock status</p>
-                <p><strong>Click Week Tabs:</strong> Switch between different weeks</p>
-                <p><strong>Sort by Name/Percentage:</strong> Click column headers to sort</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Admin Section (only shown to admins) */}
-          {isAdmin && (
-            <div className="bg-yellow-50 p-3 rounded border mt-4">
-              <h4 className="font-bold text-yellow-800 mb-2">🔧 Admin Features</h4>
-              <div className="text-sm space-y-1">
-                <p><strong>Mark Players Paid/Unpaid:</strong> Click the ✓ or ✗ in the Paid column</p>
-                <p><strong>Store Weekly Winners:</strong> Click the "Store Winners" button after MNF is final</p>
-                <p><strong>Check Stored Winners:</strong> View winners already saved in database</p>
-                <p><strong>Clear Stored Winners:</strong> Remove winners if incorrect (use with caution)</p>
-                <p><strong>Debug Tools:</strong> Use debug buttons to troubleshoot week detection</p>
-                <p className="text-xs text-yellow-600 mt-2">Note: Admin features are only visible to users with admin privileges</p>
-              </div>
-            </div>
-          )}
+        {/* Legend */}
+        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
+          <span className="flex items-center gap-1.5">
+            <span className="rounded-md bg-emerald-100 px-1.5 py-0.5 font-bold text-emerald-800">KC</span> Correct
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="rounded-md bg-rose-100 px-1.5 py-0.5 font-bold text-rose-700 line-through">KC</span> Wrong
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="rounded-md bg-slate-100 px-1.5 py-0.5 font-bold text-slate-700">KC</span> In progress
+          </span>
+          <span className="flex items-center gap-1.5">🔒 Hidden until the game locks</span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-3 w-1 rounded bg-emerald-500" /> Weekly winner
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-3 w-1 rounded bg-amber-400" /> Would have won (unpaid)
+          </span>
         </div>
+
+        {/* How it works (collapsed by default) */}
+        <details className="group mt-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <summary className="flex cursor-pointer list-none items-center justify-between p-4 font-bold text-slate-800">
+            How this page works
+            <span className="text-slate-400 transition-transform group-open:rotate-180">⌄</span>
+          </summary>
+          <div className="space-y-4 border-t border-slate-100 p-4 text-sm text-slate-600">
+            <div>
+              <h4 className="mb-1 font-semibold text-slate-800">When picks lock (Mountain Time)</h4>
+              <ul className="list-disc space-y-1 pl-5">
+                <li>Thursday, Friday and Saturday games lock at their own kickoff.</li>
+                <li>Sunday games before 2:00 PM lock at their own kickoff.</li>
+                <li>Sunday games at or after 2:00 PM, and Monday Night, all lock when the first of those Sunday games starts.</li>
+              </ul>
+            </div>
+            <div>
+              <h4 className="mb-1 font-semibold text-slate-800">Winning</h4>
+              <p>
+                Only paid players can win the week. Most correct picks wins, and ties are broken by whoever is closest
+                on the Monday Night total.
+              </p>
+            </div>
+            <div>
+              <h4 className="mb-1 font-semibold text-slate-800">Tips</h4>
+              <p>Tap a game header for kickoff time and lock countdown. Tap a player for their full name. Tap Player or Score to sort.</p>
+              {isAdmin && <p className="mt-1">Admins: tap a Paid badge to change it.</p>}
+            </div>
+          </div>
+        </details>
       </main>
+
+      {(() => {
+        const g = activeWeekGames.find((game) => game.id === selectedGameId);
+        return (
+          <GameDetailSheet
+            game={
+              g
+                ? {
+                    id: g.id,
+                    homeTeam: g.homeTeam,
+                    awayTeam: g.awayTeam,
+                    startTime: g.startTime,
+                    homeScore: g.home_score,
+                    awayScore: g.away_score,
+                    status: g.status,
+                  }
+                : null
+            }
+            live={g ? live[g.id] : undefined}
+            onClose={() => setSelectedGameId(null)}
+          />
+        );
+      })()}
     </div>
   );
 };

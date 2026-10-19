@@ -4,15 +4,14 @@ import { useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import AuthShell, { authButton, authInput, authLabel, authLink } from "@/components/AuthShell";
 
 const LoginPage = () => {
   const router = useRouter();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-
   const [showPassword, setShowPassword] = useState(false);
-
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -38,88 +37,72 @@ const LoginPage = () => {
   };
 
   return (
-    <div className="flex justify-center items-center min-h-screen bg-gray-100">
-      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md border border-gray-300">
-        <h1 className="text-2xl font-bold mb-6 text-center text-gray-900">
-          Login
-        </h1>
+    <AuthShell
+      title="Welcome back"
+      subtitle="Sign in to make this week's picks"
+      footer={
+        <>
+          New here?{" "}
+          <Link href="/signup" className={authLink}>
+            Create an account
+          </Link>
+        </>
+      }
+    >
+      <form onSubmit={handleLogin} className="space-y-4">
+        <div>
+          <label htmlFor="email" className={authLabel}>
+            Email
+          </label>
+          <input
+            id="email"
+            type="email"
+            autoComplete="email"
+            placeholder="you@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className={authInput}
+            required
+          />
+        </div>
 
-        <form onSubmit={handleLogin} className="flex flex-col gap-4">
-          {/* Email */}
-          <div>
-            <label className="block text-sm font-medium text-gray-900 mb-1">
-              Email
-            </label>
-            <input
-              type="email"
-              placeholder="Enter your email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600 text-gray-900 placeholder:text-gray-500"
-              required
-            />
-          </div>
-
-          {/* Password */}
-          <div>
-            <label className="block text-sm font-medium text-gray-900 mb-1">
+        <div>
+          <div className="mb-1.5 flex items-center justify-between">
+            <label htmlFor="password" className="text-sm font-semibold text-slate-800">
               Password
             </label>
-            <div className="relative">
-              <input
-                type={showPassword ? "text" : "password"}
-                placeholder="Enter your password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600 text-gray-900 placeholder:text-gray-500"
-                required
-              />
-              <span
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-3 cursor-pointer text-gray-600"
-              >
-                {showPassword ? "🙈" : "👁️"}
-              </span>
-            </div>
+            <Link href="/reset-password-request" className="text-sm font-semibold text-emerald-700 hover:text-emerald-800">
+              Forgot?
+            </Link>
           </div>
+          <div className="relative">
+            <input
+              id="password"
+              type={showPassword ? "text" : "password"}
+              autoComplete="current-password"
+              placeholder="Your password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className={`${authInput} pr-16`}
+              required
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg px-2 py-1 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              {showPassword ? "Hide" : "Show"}
+            </button>
+          </div>
+        </div>
 
-          {/* Submit button */}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition-colors font-semibold text-lg disabled:bg-blue-400 disabled:cursor-not-allowed"
-          >
-            {loading ? "Logging in..." : "Login"}
-          </button>
+        {error && <p className="rounded-xl bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">{error}</p>}
 
-          {error && (
-            <p className="text-red-600 font-medium text-center">{error}</p>
-          )}
-        </form>
-
-        {/* Forgot Password */}
-        <p className="mt-4 text-center text-gray-800">
-          Forgot your password?{" "}
-          <Link
-            href="/reset-password-request"
-            className="text-blue-600 font-semibold underline hover:text-blue-800"
-          >
-            Reset it here
-          </Link>
-        </p>
-
-        {/* Signup link */}
-        <p className="mt-6 text-center text-gray-800">
-          Don't have an account?{" "}
-          <Link
-            href="/signup"
-            className="text-blue-600 font-semibold underline hover:text-blue-800"
-          >
-            Sign up here
-          </Link>
-        </p>
-      </div>
-    </div>
+        <button type="submit" disabled={loading} className={authButton}>
+          {loading ? "Signing in..." : "Sign in"}
+        </button>
+      </form>
+    </AuthShell>
   );
 };
 

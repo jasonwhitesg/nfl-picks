@@ -2,8 +2,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import AuthShell, { authButton, authInput, authLabel, authLink } from "@/components/AuthShell";
 
 export default function ResetPasswordPageInner() {
   const searchParams = useSearchParams();
@@ -12,45 +14,41 @@ export default function ResetPasswordPageInner() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
+  const [done, setDone] = useState(false);
   const [loading, setLoading] = useState(false);
   const [recoveryToken, setRecoveryToken] = useState<string | null>(null);
 
   useEffect(() => {
     let token = searchParams.get("access_token");
-
     if (!token && window.location.hash) {
-      const hashParams = new URLSearchParams(
-        window.location.hash.replace("#", "")
-      );
+      const hashParams = new URLSearchParams(window.location.hash.replace("#", ""));
       token = hashParams.get("access_token");
     }
-
-    if (!token) setError("Invalid or missing token.");
+    if (!token) setError("This reset link is invalid or has expired. Request a new one.");
     else setRecoveryToken(token);
   }, [searchParams]);
 
   const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    setMessage("");
 
+    if (password.length < 6) {
+      setError("Use at least 6 characters.");
+      return;
+    }
     if (password !== confirmPassword) {
       setError("Passwords do not match.");
       return;
     }
-
     if (!recoveryToken) return;
 
     setLoading(true);
     try {
       const { error } = await supabase.auth.updateUser({ password });
-
       if (error) setError(error.message);
       else {
-        setMessage("Password successfully updated! Redirecting to login...");
+        setDone(true);
         setTimeout(() => router.push("/login"), 2000);
       }
     } catch {
@@ -61,63 +59,69 @@ export default function ResetPasswordPageInner() {
   };
 
   return (
-    <div className="flex justify-center items-center min-h-screen bg-gray-100">
-      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md border border-gray-300">
-        <h1 className="text-2xl font-bold mb-6 text-center text-gray-900">
-          Set New Password
-        </h1>
-
-        <form onSubmit={handleReset} className="flex flex-col gap-4">
-          <div className="relative">
-            <input
-              type={showPassword ? "text" : "password"}
-              placeholder="New password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              className="w-full p-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 pr-10 text-gray-900 placeholder:text-gray-500"
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-700"
-            >
-              {showPassword ? "Hide" : "Show"}
-            </button>
+    <AuthShell
+      title="New password"
+      subtitle="Choose a new password for your account"
+      footer={
+        <Link href="/reset-password-request" className={authLink}>
+          Need a new reset link?
+        </Link>
+      }
+    >
+      {done ? (
+        <div className="text-center">
+          <div className="text-4xl">✅</div>
+          <h2 className="mt-2 text-lg font-bold text-slate-900">Password updated</h2>
+          <p className="mt-1 text-sm text-slate-700">Taking you to sign in...</p>
+        </div>
+      ) : (
+        <form onSubmit={handleReset} className="space-y-4">
+          <div>
+            <label htmlFor="password" className={authLabel}>
+              New password
+            </label>
+            <div className="relative">
+              <input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                className={`${authInput} pr-16`}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg px-2 py-1 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
           </div>
 
-          <div className="relative">
+          <div>
+            <label htmlFor="confirm" className={authLabel}>
+              Confirm new password
+            </label>
             <input
-              type={showConfirm ? "text" : "password"}
-              placeholder="Confirm password"
+              id="confirm"
+              type={showPassword ? "text" : "password"}
+              autoComplete="new-password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               required
-              className="w-full p-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 pr-10 text-gray-900 placeholder:text-gray-500"
+              className={authInput}
             />
-            <button
-              type="button"
-              onClick={() => setShowConfirm(!showConfirm)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-700"
-            >
-              {showConfirm ? "Hide" : "Show"}
-            </button>
           </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 font-semibold disabled:bg-blue-400 disabled:cursor-not-allowed"
-          >
-            {loading ? "Updating..." : "Set New Password"}
-          </button>
+          {error && <p className="rounded-xl bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">{error}</p>}
 
-          {message && <p className="text-green-600 text-center mt-4">{message}</p>}
-          {error && <p className="text-red-600 text-center mt-4">{error}</p>}
+          <button type="submit" disabled={loading || !recoveryToken} className={authButton}>
+            {loading ? "Updating..." : "Set new password"}
+          </button>
         </form>
-      </div>
-    </div>
+      )}
+    </AuthShell>
   );
 }
-
-

@@ -4,6 +4,10 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
+import SplashScreen from "@/components/SplashScreen";
+import GroupInvites from "@/components/GroupInvites";
+import { splitMemberships } from "@/lib/groups";
+import { loadMemberships } from "@/lib/groupActions";
 
 type Game = {
   id: string;
@@ -23,7 +27,17 @@ type PicksSummary = {
   awayTeam: string;
   homePercent: number;
   awayPercent: number;
+  total: number;
 };
+
+const menuTiles = [
+  { href: "/all-picks", label: "All Picks", desc: "See everyone's picks", icon: "📊", tint: "bg-sky-100" },
+  { href: "/pick-summary", label: "Percentages", desc: "Voting trends", icon: "📈", tint: "bg-violet-100" },
+  { href: "/standings", label: "Standings", desc: "Who's winning", icon: "🏆", tint: "bg-amber-100" },
+  { href: "/pickem-groups", label: "Groups", desc: "Pick'em groups", icon: "👥", tint: "bg-rose-100" },
+  { href: "/rules", label: "Rules", desc: "How it works", icon: "📋", tint: "bg-slate-200" },
+  { href: "/profile", label: "Profile", desc: "Your account", icon: "👤", tint: "bg-emerald-100" },
+];
 
 export default function Home() {
   const router = useRouter();
@@ -33,9 +47,27 @@ export default function Home() {
   const [currentWeekSummary, setCurrentWeekSummary] = useState<PicksSummary[]>([]);
   const [currentWeek, setCurrentWeek] = useState<number>(1);
   const [seasonYear, setSeasonYear] = useState<number>(2026);
-  const [headerExpanded, setHeaderExpanded] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [groups, setGroups] = useState<ReturnType<typeof splitMemberships>>({
+    invites: [],
+    joined: [],
+    requested: [],
+  });
+
+  // Group invites and memberships for the signed-in player
+  const loadGroups = async (uid: string, season: number) => {
+    try {
+      setGroups(splitMemberships(await loadMemberships(uid), season));
+    } catch (err) {
+      console.error("Error loading groups:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (userId) loadGroups(userId, seasonYear);
+  }, [userId, seasonYear]);
 
   useEffect(() => {
     const checkAuthAndFetch = async () => {
@@ -47,6 +79,7 @@ export default function Home() {
       }
 
       setUserEmail(data.session.user.email || null);
+      setUserId(data.session.user.id);
 
       const { data: profile } = await supabase
         .from("profiles")
@@ -122,32 +155,37 @@ export default function Home() {
 
       setCurrentWeekGames(mappedGames);
 
-      const summaries: PicksSummary[] = await Promise.all(
-        mappedGames.map(async (game) => {
-          const { data: picks } = await supabase
-            .from("game_picks")
-            .select("selected_team")
-            .eq("game_id", game.id);
+      // One request for the whole week instead of one per game
+      const ids = mappedGames.map((g) => g.id);
+      let pickRows: { game_id: string; selected_team: string }[] = [];
 
-          const total = picks?.length || 0;
+      if (ids.length > 0) {
+        const { data: picks, error: picksError } = await supabase
+          .from("game_picks")
+          .select("game_id, selected_team")
+          .in("game_id", ids);
 
-          const homeCount =
-            picks?.filter((p: any) => p.selected_team === game.homeTeam).length ||
-            0;
+        if (picksError) throw picksError;
+        pickRows = picks || [];
+      }
 
-          const awayCount =
-            picks?.filter((p: any) => p.selected_team === game.awayTeam).length ||
-            0;
+      const summaries: PicksSummary[] = mappedGames.map((game) => {
+        const gamePicks = pickRows.filter((p) => p.game_id === game.id);
+        const total = gamePicks.length;
+        const homeCount = gamePicks.filter(
+          (p) => p.selected_team === game.homeTeam
+        ).length;
+        const homePercent = total > 0 ? Math.round((homeCount / total) * 100) : 0;
 
-          return {
-            game_id: game.id,
-            homeTeam: game.homeTeam,
-            awayTeam: game.awayTeam,
-            homePercent: total > 0 ? Math.round((homeCount / total) * 100) : 0,
-            awayPercent: total > 0 ? Math.round((awayCount / total) * 100) : 0,
-          };
-        })
-      );
+        return {
+          game_id: game.id,
+          homeTeam: game.homeTeam,
+          awayTeam: game.awayTeam,
+          homePercent,
+          awayPercent: total > 0 ? 100 - homePercent : 0,
+          total,
+        };
+      });
 
       setCurrentWeekSummary(summaries);
     } catch (err) {
@@ -173,345 +211,190 @@ export default function Home() {
       hour12: true,
     });
 
-  const getPickSummary = (gameId: string) => {
-    return currentWeekSummary.find((summary) => summary.game_id === gameId);
-  };
+  const getPickSummary = (gameId: string) =>
+    currentWeekSummary.find((s) => s.game_id === gameId);
 
-  const navItems = [
-    { href: "/make-picks", label: "Make Picks", icon: "🏈" },
-    { href: "/all-picks", label: "View All Picks", icon: "📊" },
-    { href: "/pick-summary", label: "Pick Percentages", icon: "📈" },
-    { href: "/standings", label: "Standings", icon: "🏆" },
-    { href: "/pickem-groups", label: "Pick'em Groups", icon: "👥" },
-    { href: "/rules", label: "Rules", icon: "📋" },
-    { href: "/profile", label: "Profile", icon: "👤" },
-  ];
+  const gamesWithPicks = currentWeekSummary.filter((g) => g.total > 0).length;
+
+  if (loading) return <SplashScreen message="Loading your picks..." />;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
-        <div className="flex items-center justify-between p-4">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setHeaderExpanded(!headerExpanded)}
-              className="p-2 rounded-lg hover:bg-gray-200 transition-colors flex items-center gap-2 bg-gray-100 border border-gray-300"
-              title={headerExpanded ? "Collapse menu" : "Expand menu"}
-            >
-              <span className="text-xl text-gray-800">
-                {headerExpanded ? "✕" : "☰"}
-              </span>
-              <span className="font-semibold text-gray-800 hidden sm:block">
-                {headerExpanded ? "Close Menu" : "Menu"}
-              </span>
-            </button>
-
-            <h1 className="text-2xl font-bold text-gray-800">NFL Picks</h1>
+    <div className="min-h-screen bg-page">
+      {/* Header */}
+      <header className="sticky top-0 z-50 bg-ink text-white shadow-md">
+        <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-3">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">🏈</span>
+            <div>
+              <h1 className="text-lg font-extrabold leading-tight tracking-tight">
+                NFL Picks
+              </h1>
+              <p className="text-xs text-slate-400">
+                Season {seasonYear} · Week {currentWeek}
+              </p>
+            </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold">
-                {userEmail?.charAt(0).toUpperCase()}
-              </div>
-
-              <div className="hidden md:block text-right">
-                <p className="text-sm font-medium text-gray-700">{userEmail}</p>
-                <p className="text-xs text-gray-500">
-                  {isAdmin ? "Admin" : "User"} · Season {seasonYear}
-                </p>
-              </div>
+          <div className="flex items-center gap-3">
+            <div className="hidden text-right sm:block">
+              <p className="text-sm font-medium text-slate-200">{userEmail}</p>
+              <p className="text-xs text-slate-400">{isAdmin ? "Admin" : "Player"}</p>
             </div>
-
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500 font-bold text-white">
+              {userEmail?.charAt(0).toUpperCase()}
+            </div>
             <button
               onClick={handleLogout}
-              className="bg-red-500 text-white px-3 py-2 rounded text-sm font-medium hover:bg-red-600 transition-colors"
+              className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-800"
             >
               Logout
             </button>
           </div>
         </div>
-
-        {headerExpanded && (
-          <div className="absolute top-full left-0 w-80 bg-white border-b border-r border-gray-200 shadow-lg z-40">
-            <div className="p-6">
-              <div className="mb-6">
-                <h2 className="text-xl font-bold text-gray-800 mb-2">
-                  Navigation
-                </h2>
-                <p className="text-sm text-gray-600">
-                  Quick access to all features
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 gap-3">
-                {navItems.map((item) => (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className="flex items-center gap-4 p-4 rounded-lg bg-gray-50 hover:bg-blue-50 hover:text-blue-700 transition-all duration-200 group border border-gray-200 hover:border-blue-200"
-                    onClick={() => setHeaderExpanded(false)}
-                  >
-                    <span className="text-2xl group-hover:scale-110 transition-transform">
-                      {item.icon}
-                    </span>
-
-                    <div className="flex-1">
-                      <div className="font-semibold text-gray-800 group-hover:text-blue-800">
-                        {item.label}
-                      </div>
-                      <div className="text-xs text-gray-500 group-hover:text-blue-600 mt-1">
-                        Click to navigate
-                      </div>
-                    </div>
-
-                    <span className="text-gray-400 group-hover:text-blue-500 transition-colors">
-                      →
-                    </span>
-                  </Link>
-                ))}
-              </div>
-
-              <div className="mt-6 pt-6 border-t border-gray-200">
-                <h3 className="font-semibold text-gray-800 mb-3">
-                  Current Week Stats
-                </h3>
-
-                <div className="grid grid-cols-3 gap-3 text-center">
-                  <div className="bg-blue-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-blue-600">
-                      {currentWeekGames.length}
-                    </div>
-                    <div className="text-xs text-blue-800">Games</div>
-                  </div>
-
-                  <div className="bg-green-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-green-600">
-                      {
-                        currentWeekSummary.filter(
-                          (g) => g.homePercent + g.awayPercent > 0
-                        ).length
-                      }
-                    </div>
-                    <div className="text-xs text-green-800">With Picks</div>
-                  </div>
-
-                  <div className="bg-purple-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-purple-600">
-                      {currentWeek}
-                    </div>
-                    <div className="text-xs text-purple-800">Week</div>
-                  </div>
-                </div>
-              </div>
-
-              {isAdmin && (
-                <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <span className="text-yellow-600">🔧</span>
-                    <span className="text-sm font-semibold text-yellow-800">
-                      Admin Mode Active
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
       </header>
 
-      <main className="p-6">
-        <div className="text-center mb-12 max-w-4xl mx-auto">
-          <h1 className="text-4xl font-bold text-gray-800 mb-4">
-            NFL Picks Dashboard
-          </h1>
-          <p className="text-lg text-gray-600">
-            Make your weekly NFL picks and see how others are voting. Track your
-            performance and compete with friends!
-          </p>
-        </div>
-
-        <div className="flex flex-col sm:flex-row justify-center gap-4 mb-12 max-w-2xl mx-auto">
-          <Link
-            href="/make-picks"
-            className="flex flex-col items-center justify-center gap-3 rounded-xl bg-blue-500 text-white p-6 font-semibold hover:bg-blue-600 transition-all duration-200 hover:scale-105 shadow-lg"
-          >
-            <span className="text-3xl">🏈</span>
-            <span className="text-lg">Make Picks</span>
-            <span className="text-sm opacity-90">Select your winners</span>
-          </Link>
-
-          <Link
-            href="/all-picks"
-            className="flex flex-col items-center justify-center gap-3 rounded-xl bg-green-500 text-white p-6 font-semibold hover:bg-green-600 transition-all duration-200 hover:scale-105 shadow-lg"
-          >
-            <span className="text-3xl">📊</span>
-            <span className="text-lg">View All Picks</span>
-            <span className="text-sm opacity-90">See everyone's picks</span>
-          </Link>
-
-          <Link
-            href="/pick-summary"
-            className="flex flex-col items-center justify-center gap-3 rounded-xl bg-purple-500 text-white p-6 font-semibold hover:bg-purple-600 transition-all duration-200 hover:scale-105 shadow-lg"
-          >
-            <span className="text-3xl">📈</span>
-            <span className="text-lg">Pick Percentages</span>
-            <span className="text-sm opacity-90">View voting trends</span>
-          </Link>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-lg p-6 max-w-4xl mx-auto">
-          <h2 className="text-2xl font-bold text-gray-800 mb-6 text-center">
-            Week {currentWeek} Games & Pick Percentages
-          </h2>
-
-          {loading ? (
-            <div className="text-center py-8">
-              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-              <p className="text-gray-600 mt-2">Loading current week data...</p>
+      <main className="mx-auto max-w-4xl px-4 py-6">
+        {/* Primary action */}
+        <Link
+          href="/make-picks"
+          className="flex items-center justify-between rounded-2xl bg-emerald-600 p-5 text-white shadow-lg transition-colors hover:bg-emerald-700 active:scale-[0.99]"
+        >
+          <div className="flex items-center gap-4">
+            <span className="text-4xl">🏈</span>
+            <div>
+              <div className="text-xl font-extrabold">Make Your Picks</div>
+              <div className="text-sm text-emerald-100">
+                Week {currentWeek} · {currentWeekGames.length} games
+              </div>
             </div>
-          ) : currentWeekGames.length === 0 ? (
-            <p className="text-gray-600 text-center py-8">
-              No games scheduled for this week.
+          </div>
+          <span className="text-2xl">→</span>
+        </Link>
+
+        {/* Group invites + your groups */}
+        {userId && (
+          <div className="mt-4">
+            <GroupInvites
+              userId={userId}
+              invites={groups.invites}
+              joined={groups.joined}
+              requested={groups.requested}
+              onChange={() => loadGroups(userId, seasonYear)}
+            />
+          </div>
+        )}
+
+        {/* Menu grid */}
+        <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3">
+          {menuTiles.map((tile) => (
+            <Link
+              key={tile.href}
+              href={tile.href}
+              className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition-all hover:border-emerald-300 hover:shadow-md active:scale-[0.98]"
+            >
+              <span
+                className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-2xl ${tile.tint}`}
+              >
+                {tile.icon}
+              </span>
+              <div className="min-w-0">
+                <div className="truncate font-bold text-slate-800">{tile.label}</div>
+                <div className="truncate text-xs text-slate-500">{tile.desc}</div>
+              </div>
+            </Link>
+          ))}
+        </div>
+
+        {/* This week */}
+        <section className="mt-8">
+          <div className="mb-3 flex items-end justify-between">
+            <h2 className="text-xl font-extrabold text-slate-800">
+              Week {currentWeek} Games
+            </h2>
+            <p className="text-sm text-slate-500">
+              {gamesWithPicks} of {currentWeekGames.length} have picks
             </p>
+          </div>
+
+          {currentWeekGames.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-500">
+              No games scheduled for this week.
+            </div>
           ) : (
-            <div className="space-y-6">
+            <div className="space-y-3">
               {currentWeekGames.map((game) => {
                 const isFinal = game.status === "Final";
                 const isLive = game.status === "InProgress";
-                const pickSummary = getPickSummary(game.id);
+                const summary = getPickSummary(game.id);
+                const hasPicks = !!summary && summary.total > 0;
 
                 return (
                   <div
                     key={game.id}
-                    className="border border-gray-200 rounded-lg p-6 hover:shadow-md transition-all duration-200 bg-white"
+                    className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
                   >
-                    <div className="flex flex-col sm:flex-row justify-between items-start mb-4 gap-3">
-                      <div className="font-semibold text-gray-800 text-xl">
-                        {game.awayTeam} @ {game.homeTeam}
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-lg font-bold text-slate-800">
+                          {game.awayTeam} @ {game.homeTeam}
+                        </div>
+                        <div className="text-sm text-slate-500">
+                          {formatTime(game.start_time)}
+                        </div>
                       </div>
-
-                      <div
-                        className={`text-sm font-medium px-3 py-1 rounded-full ${
+                      <span
+                        className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold ${
                           isFinal
-                            ? "bg-gray-100 text-gray-600"
+                            ? "bg-slate-100 text-slate-600"
                             : isLive
-                            ? "bg-green-100 text-green-600"
-                            : "bg-blue-100 text-blue-600"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-sky-100 text-sky-700"
                         }`}
                       >
                         {isFinal ? "FINAL" : isLive ? "LIVE" : "UPCOMING"}
-                      </div>
+                      </span>
                     </div>
 
-                    <div className="text-sm text-gray-600 mb-4 font-medium">
-                      {formatTime(game.start_time)}
-                    </div>
-
-                    {isFinal &&
-                      game.home_score !== null &&
-                      game.away_score !== null && (
-                        <div className="text-lg font-bold text-gray-800 mb-4 p-3 bg-gray-50 rounded-lg border">
-                          Final: {game.awayTeam} {game.away_score} -{" "}
-                          {game.homeTeam} {game.home_score}
-                        </div>
-                      )}
-
-                    {pickSummary ? (
-                      <div className="border-t pt-4">
-                        <div className="text-sm font-semibold text-gray-700 mb-3">
-                          Pick Percentages:
-                        </div>
-
-                        <div className="space-y-3">
-                          <div className="flex justify-between items-center">
-                            <span className="text-sm font-medium text-gray-600">
-                              {pickSummary.awayTeam}
-                            </span>
-
-                            <div className="flex items-center gap-3">
-                              <div className="w-24 bg-gray-200 rounded-full h-3">
-                                <div
-                                  className="bg-blue-500 h-3 rounded-full transition-all duration-500"
-                                  style={{
-                                    width: `${pickSummary.awayPercent}%`,
-                                  }}
-                                ></div>
-                              </div>
-
-                              <span className="text-sm font-bold min-w-10 text-blue-600">
-                                {pickSummary.awayPercent}%
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="flex justify-between items-center">
-                            <span className="text-sm font-medium text-gray-600">
-                              {pickSummary.homeTeam}
-                            </span>
-
-                            <div className="flex items-center gap-3">
-                              <div className="w-24 bg-gray-200 rounded-full h-3">
-                                <div
-                                  className="bg-red-500 h-3 rounded-full transition-all duration-500"
-                                  style={{
-                                    width: `${pickSummary.homePercent}%`,
-                                  }}
-                                ></div>
-                              </div>
-
-                              <span className="text-sm font-bold min-w-10 text-red-600">
-                                {pickSummary.homePercent}%
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="border-t pt-4">
-                        <div className="text-sm text-gray-500 text-center bg-gray-50 py-3 rounded-lg">
-                          No picks made for this game yet
-                        </div>
+                    {isFinal && game.home_score != null && game.away_score != null && (
+                      <div className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-sm font-bold text-slate-800">
+                        {game.awayTeam} {game.away_score} – {game.homeTeam} {game.home_score}
                       </div>
                     )}
+
+                    <div className="mt-4">
+                      {hasPicks && summary ? (
+                        <>
+                          <div className="mb-1 flex justify-between text-xs font-semibold text-slate-600">
+                            <span>
+                              {summary.awayTeam} {summary.awayPercent}%
+                            </span>
+                            <span>
+                              {summary.homePercent}% {summary.homeTeam}
+                            </span>
+                          </div>
+                          <div className="flex h-2.5 overflow-hidden rounded-full bg-slate-200">
+                            <div
+                              className="bg-slate-700 transition-all duration-500"
+                              style={{ width: `${summary.awayPercent}%` }}
+                            />
+                            <div
+                              className="bg-emerald-500 transition-all duration-500"
+                              style={{ width: `${summary.homePercent}%` }}
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="rounded-xl bg-slate-50 py-2 text-center text-xs text-slate-400">
+                          No picks made for this game yet
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               })}
             </div>
           )}
-        </div>
-
-        <div className="mt-8 bg-white rounded-xl shadow-lg p-6 max-w-4xl mx-auto">
-          <h2 className="text-2xl font-bold text-gray-800 mb-6 text-center">
-            Quick Stats
-          </h2>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-            <div className="text-center p-4 bg-blue-50 rounded-lg border border-blue-200">
-              <div className="text-3xl font-bold text-blue-600">
-                {currentWeekGames.length}
-              </div>
-              <div className="text-gray-700 font-medium">Games This Week</div>
-            </div>
-
-            <div className="text-center p-4 bg-green-50 rounded-lg border border-green-200">
-              <div className="text-3xl font-bold text-green-600">
-                {
-                  currentWeekSummary.filter(
-                    (g) => g.homePercent + g.awayPercent > 0
-                  ).length
-                }
-              </div>
-              <div className="text-gray-700 font-medium">Games With Picks</div>
-            </div>
-
-            <div className="text-center p-4 bg-purple-50 rounded-lg border border-purple-200">
-              <div className="text-3xl font-bold text-purple-600">
-                {currentWeek}
-              </div>
-              <div className="text-gray-700 font-medium">Current Week</div>
-            </div>
-          </div>
-        </div>
+        </section>
       </main>
     </div>
   );

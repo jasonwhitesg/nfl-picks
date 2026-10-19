@@ -1,831 +1,119 @@
-"use client";
-
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
-import { useRouter } from "next/navigation";
-
-type PickemGroup = {
-  id: string;
-  name: string;
-  invite_code: string;
-  owner_user_id: string;
-  season_year: number;
-  is_active: boolean;
-  created_at: string;
-};
-
-type GroupMember = {
-  id: string;
-  group_id: string;
-  user_id: string;
-  role: string;
-  status: "approved" | "pending" | "denied";
-  is_paid: boolean;
-  paid_at: string | null;
-  profiles?: {
-    user_id: string;
-    username: string;
-    first_name: string;
-    last_name: string;
-    email: string;
-  }[];
-};
-
-export default function PickemGroupsPage() {
-  const router = useRouter();
-
-  const [headerExpanded, setHeaderExpanded] = useState(false);
-  const [userId, setUserId] = useState<string | null>(null);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState<boolean>(false);
-  const [seasonYear, setSeasonYear] = useState(2026);
-  const [loading, setLoading] = useState(true);
-
-  const [groupName, setGroupName] = useState("");
-  const [joinCode, setJoinCode] = useState("");
-  const [myGroups, setMyGroups] = useState<PickemGroup[]>([]);
-  const [selectedGroup, setSelectedGroup] = useState<PickemGroup | null>(null);
-  const [members, setMembers] = useState<GroupMember[]>([]);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-
-  const navItems = [
-    { href: "/", label: "Home", icon: "🏠" },
-    { href: "/make-picks", label: "Make Picks", icon: "🏈" },
-    { href: "/all-picks", label: "View All Picks", icon: "📊" },
-    { href: "/pick-summary", label: "Pick Percentages", icon: "📈" },
-    { href: "/standings", label: "Standings", icon: "🏆" },
-    { href: "/pickem-groups", label: "Pick'em Groups", icon: "👥" },
-    { href: "/rules", label: "Rules", icon: "📋" },
-    { href: "/profile", label: "Profile", icon: "👤" },
-  ];
-
-  useEffect(() => {
-    loadPage();
-  }, []);
-
-  const makeInviteCode = () => {
-    return Math.random().toString(36).substring(2, 8).toUpperCase();
-  };
-
-  const loadPage = async () => {
-    try {
-      setLoading(true);
-
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        router.push("/login");
-        return;
-      }
-
-      setUserId(user.id);
-      setUserEmail(user.email || null);
-
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("is_admin")
-        .eq("user_id", user.id)
-        .single();
-
-      setIsAdmin(profile?.is_admin || false);
-
-      const { data: config } = await supabase
-        .from("season_config")
-        .select("season_year")
-        .single();
-
-      const activeSeason = config?.season_year ?? 2026;
-      setSeasonYear(activeSeason);
-
-      await fetchMyGroups(user.id, activeSeason);
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || "Error loading groups");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchMyGroups = async (
-    currentUserId: string,
-    activeSeason: number
-  ) => {
-    const { data, error } = await supabase
-      .from("group_members")
-      .select(`
-        group_id,
-        status,
-        groups (
-          id,
-          name,
-          invite_code,
-          owner_user_id,
-          season_year,
-          is_active,
-          created_at
-        )
-      `)
-      .eq("user_id", currentUserId)
-      .neq("status", "denied");
-
-    if (error) throw error;
-
-    const groups =
-      data
-        ?.map((row: any) => row.groups)
-        .filter(
-          (group: PickemGroup | null) =>
-            group && group.season_year === activeSeason
-        ) || [];
-
-    setMyGroups(groups);
-
-    if (groups.length > 0 && !selectedGroup) {
-      setSelectedGroup(groups[0]);
-      await fetchMembers(groups[0].id);
-    }
-  };
-
-  const fetchMembers = async (groupId: string) => {
-    const { data: memberData, error: memberError } = await supabase
-      .from("group_members")
-      .select(`
-        id,
-        group_id,
-        user_id,
-        role,
-        status,
-        is_paid,
-        paid_at
-      `)
-      .eq("group_id", groupId)
-      .order("created_at", { ascending: true });
-
-    if (memberError) throw memberError;
-
-    const userIds = (memberData || []).map((member) => member.user_id);
-
-    if (userIds.length === 0) {
-      setMembers([]);
-      return;
-    }
-
-    const { data: profileData, error: profileError } = await supabase
-      .from("profiles")
-      .select("user_id, username, first_name, last_name, email")
-      .in("user_id", userIds);
-
-    if (profileError) throw profileError;
-
-    const membersWithProfiles = (memberData || []).map((member) => {
-      const profile = profileData?.find(
-        (profile) => profile.user_id === member.user_id
-      );
-
-      return {
-        ...member,
-        profiles: profile ? [profile] : [],
-      };
-    });
-
-    setMembers(membersWithProfiles as GroupMember[]);
-  };
-
-  const createGroup = async () => {
-    try {
-      setMessage("");
-      setError("");
-
-      if (!userId) return;
-
-      if (groupName.trim().length < 3) {
-        setError("Group name must be at least 3 characters.");
-        return;
-      }
-
-      const inviteCode = makeInviteCode();
-
-      const { data: group, error: groupError } = await supabase
-        .from("groups")
-        .insert({
-          name: groupName.trim(),
-          owner_user_id: userId,
-          season_year: seasonYear,
-          invite_code: inviteCode,
-          is_active: true,
-        })
-        .select()
-        .single();
-
-      if (groupError) throw groupError;
-
-      const { error: memberError } = await supabase
-        .from("group_members")
-        .insert({
-          group_id: group.id,
-          user_id: userId,
-          role: "owner",
-          status: "approved",
-          is_paid: true,
-          paid_at: new Date().toISOString(),
-        });
-
-      if (memberError) throw memberError;
-
-      setGroupName("");
-      setSelectedGroup(group);
-      setMessage(`Group created. Invite code: ${group.invite_code}`);
-
-      await fetchMyGroups(userId, seasonYear);
-      await fetchMembers(group.id);
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || "Error creating group");
-    }
-  };
-
-  const joinGroup = async () => {
-    try {
-      setMessage("");
-      setError("");
-
-      if (!userId) return;
-
-      const code = joinCode.trim().toUpperCase();
-
-      if (!code) {
-        setError("Enter an invite code.");
-        return;
-      }
-
-      const { data: group, error: groupError } = await supabase
-        .from("groups")
-        .select("*")
-        .eq("invite_code", code)
-        .eq("is_active", true)
-        .single();
-
-      if (groupError || !group) {
-        setError("No active group found with that invite code.");
-        return;
-      }
-
-      const { error: joinError } = await supabase
-        .from("group_members")
-        .upsert(
-          {
-            group_id: group.id,
-            user_id: userId,
-            role: "member",
-            status: "pending",
-            is_paid: false,
-            paid_at: null,
-          },
-          {
-            onConflict: "group_id,user_id",
-          }
-        );
-
-      if (joinError) throw joinError;
-
-      setJoinCode("");
-      setSelectedGroup(group);
-      setMessage(
-        `Request sent to join ${group.name}. Waiting for owner approval.`
-      );
-
-      await fetchMyGroups(userId, seasonYear);
-      await fetchMembers(group.id);
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || "Error joining group");
-    }
-  };
-
-  const approveMember = async (member: GroupMember) => {
-    try {
-      if (!selectedGroup || selectedGroup.owner_user_id !== userId) return;
-
-      const { error } = await supabase
-        .from("group_members")
-        .update({ status: "approved" })
-        .eq("id", member.id);
-
-      if (error) throw error;
-
-      await fetchMembers(member.group_id);
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || "Error approving member");
-    }
-  };
-
-  const denyMember = async (member: GroupMember) => {
-    try {
-      if (!selectedGroup || selectedGroup.owner_user_id !== userId) return;
-
-      const { error } = await supabase
-        .from("group_members")
-        .update({
-          status: "denied",
-          is_paid: false,
-          paid_at: null,
-        })
-        .eq("id", member.id);
-
-      if (error) throw error;
-
-      await fetchMembers(member.group_id);
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || "Error denying member");
-    }
-  };
-
-  const togglePaid = async (member: GroupMember) => {
-    try {
-      if (!selectedGroup || selectedGroup.owner_user_id !== userId) return;
-
-      const newPaidStatus = !member.is_paid;
-
-      const { error } = await supabase
-        .from("group_members")
-        .update({
-          is_paid: newPaidStatus,
-          paid_at: newPaidStatus ? new Date().toISOString() : null,
-        })
-        .eq("id", member.id);
-
-      if (error) throw error;
-
-      await fetchMembers(member.group_id);
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || "Error updating paid status");
-    }
-  };
-
-  const selectGroup = async (group: PickemGroup) => {
-    setSelectedGroup(group);
-    await fetchMembers(group.id);
-  };
-
-  const copyInviteCode = async () => {
-    if (!selectedGroup) return;
-
-    await navigator.clipboard.writeText(selectedGroup.invite_code);
-    setMessage(`Copied invite code: ${selectedGroup.invite_code}`);
-  };
-
-  const getDisplayName = (member: GroupMember) => {
-    const profile = member.profiles?.[0];
-
-    if (!profile) return "Unknown Player";
-
-    const fullName =
-      `${profile.first_name ?? ""} ${profile.last_name ?? ""}`.trim();
-
-    if (fullName) return fullName;
-
-    return profile.username || profile.email || "Unknown Player";
-  };
-
-  const getApprovedMembers = () => {
-    return members.filter((member) => member.status === "approved");
-  };
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.push("/login");
-  };
-
-  const isOwner = selectedGroup?.owner_user_id === userId;
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-xl text-gray-700">Loading groups...</div>
-      </div>
-    );
-  }
-
-  const approvedMembers = getApprovedMembers();
-
+import Link from "next/link";
+import PageHeader from "@/components/PageHeader";
+
+// How the pool works. Plain content, no data loading.
+const sections: { icon: string; title: string; body: React.ReactNode }[] = [
+  {
+    icon: "🏈",
+    title: "Making picks",
+    body: (
+      <ul className="list-disc space-y-1.5 pl-5">
+        <li>Pick the winner of every game each week on the Make Picks page.</li>
+        <li>You can change a pick as many times as you like until that game locks.</li>
+        <li>
+          For the <strong>Monday Night</strong> game you also guess the total points scored by both teams. You need to
+          enter that total before you can pick the Monday game.
+        </li>
+      </ul>
+    ),
+  },
+  {
+    icon: "🔒",
+    title: "When picks lock",
+    body: (
+      <>
+        <p className="mb-2">All times are Mountain Time.</p>
+        <ul className="list-disc space-y-1.5 pl-5">
+          <li>Thursday, Friday and Saturday games lock at their own kickoff.</li>
+          <li>Sunday games that start before 2:00 PM lock at their own kickoff.</li>
+          <li>
+            Sunday games at or after 2:00 PM, <strong>and the Monday Night game</strong>, all lock together when the first
+            of those Sunday afternoon games kicks off.
+          </li>
+        </ul>
+        <p className="mt-2">Everyone's picks for a game become visible on All Picks once that game locks.</p>
+      </>
+    ),
+  },
+  {
+    icon: "🏆",
+    title: "Winning the week",
+    body: (
+      <ul className="list-disc space-y-1.5 pl-5">
+        <li>
+          Only <strong>paid</strong> players can win the week.
+        </li>
+        <li>The paid player with the most correct picks wins.</li>
+        <li>
+          Ties are broken by the <strong>Monday Night total</strong>: whoever's guess is closest to the actual total
+          points wins.
+        </li>
+        <li>If the tied players have no Monday total to compare, they share the win.</li>
+        <li>A game that ends in a tie counts as a miss for everyone.</li>
+        <li>A week is decided once every game, including Monday Night, is final.</li>
+      </ul>
+    ),
+  },
+  {
+    icon: "🥈",
+    title: "“Would have won”",
+    body: (
+      <p>
+        If an unpaid player gets strictly <em>more</em> correct picks than the paid winner, they're shown as “would have
+        won” on All Picks and Standings, but the paid player still takes the week.
+      </p>
+    ),
+  },
+  {
+    icon: "💵",
+    title: "Payouts",
+    body: (
+      <ul className="list-disc space-y-1.5 pl-5">
+        <li>It's $5 to play each week.</li>
+        <li>
+          <strong>Winner takes all:</strong> the week's pot is $5 × the number of paid players. With 11 paid players, the
+          winner gets $55.
+        </li>
+        <li>If paid players tie for the win, they split the pot evenly.</li>
+        <li>Your running total is on the Standings page.</li>
+      </ul>
+    ),
+  },
+  {
+    icon: "👥",
+    title: "Pick'em groups",
+    body: (
+      <ul className="list-disc space-y-1.5 pl-5">
+        <li>Start a group to see how just your friends, family or office are picking.</li>
+        <li>Group owners can invite players by name. Invites show up on the invited player's Home page.</li>
+        <li>You can also join with a group's code. The owner approves your request.</li>
+      </ul>
+    ),
+  },
+];
+
+export default function RulesPage() {
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
-        <div className="flex items-center justify-between p-4">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setHeaderExpanded(!headerExpanded)}
-              className="p-2 rounded-lg hover:bg-gray-200 transition-colors flex items-center gap-2 bg-gray-100 border border-gray-300"
-            >
-              <span className="text-xl text-gray-800">
-                {headerExpanded ? "✕" : "☰"}
-              </span>
-              <span className="font-semibold text-gray-800 hidden sm:block">
-                {headerExpanded ? "Close Menu" : "Menu"}
-              </span>
-            </button>
+    <div className="min-h-screen bg-page">
+      <PageHeader title="Rules" subtitle="How the pool works" icon="📋" />
 
-            <h1 className="text-2xl font-bold text-gray-800">NFL Picks</h1>
-          </div>
+      <main className="mx-auto -mt-10 max-w-3xl space-y-3 px-4 pb-6">
+        {sections.map((s) => (
+          <section key={s.title} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-2 flex items-center gap-2 text-lg font-bold text-slate-900">
+              <span className="text-2xl">{s.icon}</span>
+              {s.title}
+            </h2>
+            <div className="text-[15px] leading-relaxed text-slate-800">{s.body}</div>
+          </section>
+        ))}
 
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold">
-                {userEmail?.charAt(0).toUpperCase() || "U"}
-              </div>
-
-              <div className="hidden md:block text-right">
-                <p className="text-sm font-medium text-gray-700">
-                  {userEmail || "User"}
-                </p>
-                <p className="text-xs text-gray-500">
-                  {isAdmin ? "Admin" : "User"}
-                </p>
-              </div>
-            </div>
-
-            <button
-              onClick={handleLogout}
-              className="bg-red-500 text-white px-3 py-2 rounded text-sm font-medium hover:bg-red-600 transition-colors"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-
-        {headerExpanded && (
-          <div className="absolute top-full left-0 w-80 bg-white border-b border-r border-gray-200 shadow-lg z-40">
-            <div className="p-6">
-              <div className="mb-6">
-                <h2 className="text-xl font-bold text-gray-800 mb-2">
-                  Navigation
-                </h2>
-                <p className="text-sm text-gray-600">
-                  Quick access to all features
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 gap-3">
-                {navItems.map((item) => (
-                  <a
-                    key={item.href}
-                    href={item.href}
-                    className={`flex items-center gap-4 p-4 rounded-lg transition-all duration-200 group border ${
-                      item.href === "/pickem-groups"
-                        ? "bg-blue-50 text-blue-700 border-blue-300"
-                        : "bg-gray-50 hover:bg-blue-50 hover:text-blue-700 border-gray-200 hover:border-blue-200"
-                    }`}
-                    onClick={() => setHeaderExpanded(false)}
-                  >
-                    <span className="text-2xl group-hover:scale-110 transition-transform">
-                      {item.icon}
-                    </span>
-
-                    <div className="flex-1">
-                      <div className="font-semibold text-gray-800 group-hover:text-blue-800">
-                        {item.label}
-                      </div>
-                      <div className="text-xs text-gray-500 group-hover:text-blue-600 mt-1">
-                        Click to navigate
-                      </div>
-                    </div>
-
-                    <span className="text-gray-400 group-hover:text-blue-500 transition-colors">
-                      →
-                    </span>
-                  </a>
-                ))}
-              </div>
-
-              <div className="mt-6 pt-6 border-t border-gray-200">
-                <h3 className="font-semibold text-gray-800 mb-3">
-                  Group Stats
-                </h3>
-                <div className="grid grid-cols-3 gap-3 text-center">
-                  <div className="bg-blue-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-blue-600">
-                      {myGroups.length}
-                    </div>
-                    <div className="text-xs text-blue-800">Groups</div>
-                  </div>
-
-                  <div className="bg-green-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-green-600">
-                      {approvedMembers.length}
-                    </div>
-                    <div className="text-xs text-green-800">Approved</div>
-                  </div>
-
-                  <div className="bg-purple-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-purple-600">
-                      {seasonYear}
-                    </div>
-                    <div className="text-xs text-purple-800">Season</div>
-                  </div>
-                </div>
-              </div>
-
-              {isAdmin && (
-                <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <span className="text-yellow-600">🔧</span>
-                    <span className="text-sm font-semibold text-yellow-800">
-                      Admin Mode Active
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </header>
-
-      <main className="p-6 max-w-6xl mx-auto">
-        <div className="text-center mb-8">
-          <h2 className="text-4xl font-bold text-gray-800 mb-3">Groups</h2>
-          <p className="text-gray-600 text-lg">
-            Create a private pick&apos;em group, invite players, approve
-            requests, and track payments.
-          </p>
-        </div>
-
-        {message && (
-          <div className="mb-6 bg-green-50 border border-green-300 text-green-800 rounded-lg p-4">
-            {message}
-          </div>
-        )}
-
-        {error && (
-          <div className="mb-6 bg-red-50 border border-red-300 text-red-800 rounded-lg p-4">
-            {error}
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-            <h3 className="text-2xl font-bold text-gray-800 mb-4">
-              Create Group
-            </h3>
-
-            <input
-              value={groupName}
-              onChange={(e) => setGroupName(e.target.value)}
-              placeholder="Example: Honda Pick'em League"
-              className="w-full border border-gray-300 rounded-lg px-4 py-3 mb-4"
-            />
-
-            <button
-              onClick={createGroup}
-              className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700"
-            >
-              ➕ Create Group
-            </button>
-          </div>
-
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-            <h3 className="text-2xl font-bold text-gray-800 mb-4">
-              Request to Join Group
-            </h3>
-
-            <input
-              value={joinCode}
-              onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-              placeholder="Enter invite code"
-              className="w-full border border-gray-300 rounded-lg px-4 py-3 mb-4 uppercase"
-            />
-
-            <button
-              onClick={joinGroup}
-              className="w-full bg-green-600 text-white py-3 rounded-lg font-semibold hover:bg-green-700"
-            >
-              🔎 Request to Join
-            </button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-            <h3 className="text-xl font-bold text-gray-800 mb-4">
-              My Groups
-            </h3>
-
-            {myGroups.length === 0 ? (
-              <p className="text-gray-500">You are not in any groups yet.</p>
-            ) : (
-              <div className="space-y-3">
-                {myGroups.map((group) => (
-                  <button
-                    key={group.id}
-                    onClick={() => selectGroup(group)}
-                    className={`w-full text-left p-4 rounded-lg border transition ${
-                      selectedGroup?.id === group.id
-                        ? "bg-blue-50 border-blue-400"
-                        : "bg-gray-50 border-gray-200 hover:bg-gray-100"
-                    }`}
-                  >
-                    <div className="font-bold text-gray-800">{group.name}</div>
-                    <div className="text-sm text-gray-500">
-                      Code: {group.invite_code}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-            {!selectedGroup ? (
-              <div className="text-center text-gray-500 py-12">
-                Select or create a group.
-              </div>
-            ) : (
-              <>
-                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
-                  <div>
-                    <h3 className="text-2xl font-bold text-gray-800">
-                      {selectedGroup.name}
-                    </h3>
-                    <p className="text-gray-500">
-                      Invite Code:{" "}
-                      <span className="font-bold text-gray-800">
-                        {selectedGroup.invite_code}
-                      </span>
-                    </p>
-                  </div>
-
-                  <button
-                    onClick={copyInviteCode}
-                    className="bg-gray-800 text-white px-4 py-2 rounded-lg font-semibold hover:bg-gray-900"
-                  >
-                    Copy Invite Code
-                  </button>
-                </div>
-
-                <div className="mb-6 grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <div className="bg-blue-50 p-4 rounded-lg text-center">
-                    <div className="text-2xl font-bold text-blue-600">
-                      {approvedMembers.length}
-                    </div>
-                    <div className="text-sm text-blue-800">Approved</div>
-                  </div>
-
-                  <div className="bg-yellow-50 p-4 rounded-lg text-center">
-                    <div className="text-2xl font-bold text-yellow-600">
-                      {members.filter((m) => m.status === "pending").length}
-                    </div>
-                    <div className="text-sm text-yellow-800">Pending</div>
-                  </div>
-
-                  <div className="bg-green-50 p-4 rounded-lg text-center">
-                    <div className="text-2xl font-bold text-green-600">
-                      {approvedMembers.filter((m) => m.is_paid).length}
-                    </div>
-                    <div className="text-sm text-green-800">Paid</div>
-                  </div>
-
-                  <div className="bg-orange-50 p-4 rounded-lg text-center">
-                    <div className="text-2xl font-bold text-orange-600">
-                      {approvedMembers.filter((m) => !m.is_paid).length}
-                    </div>
-                    <div className="text-sm text-orange-800">Unpaid</div>
-                  </div>
-                </div>
-
-                <h4 className="text-xl font-bold text-gray-800 mb-4">
-                  Members
-                </h4>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse">
-                    <thead>
-                      <tr className="bg-gray-100">
-                        <th className="border p-3 text-left">Player</th>
-                        <th className="border p-3 text-left">Role</th>
-                        <th className="border p-3 text-left">Status</th>
-                        <th className="border p-3 text-left">Paid</th>
-                        {isOwner && (
-                          <th className="border p-3 text-left">Action</th>
-                        )}
-                      </tr>
-                    </thead>
-
-                    <tbody>
-                      {members.map((member) => (
-                        <tr key={member.id}>
-                          <td className="border p-3">
-                            <div className="font-semibold text-gray-800">
-                              {getDisplayName(member)}
-                            </div>
-                            <div className="text-xs text-gray-500">
-                              {member.profiles?.[0]?.email}
-                            </div>
-                          </td>
-
-                          <td className="border p-3 capitalize">
-                            {member.role}
-                          </td>
-
-                          <td className="border p-3 capitalize">
-                            {member.status === "approved" && (
-                              <span className="bg-green-100 text-green-800 px-2 py-1 rounded text-sm font-bold">
-                                Approved
-                              </span>
-                            )}
-
-                            {member.status === "pending" && (
-                              <span className="bg-yellow-100 text-yellow-800 px-2 py-1 rounded text-sm font-bold">
-                                Pending
-                              </span>
-                            )}
-
-                            {member.status === "denied" && (
-                              <span className="bg-red-100 text-red-800 px-2 py-1 rounded text-sm font-bold">
-                                Denied
-                              </span>
-                            )}
-                          </td>
-
-                          <td className="border p-3">
-                            {member.status !== "approved" ? (
-                              <span className="text-gray-400 text-sm">
-                                Not active
-                              </span>
-                            ) : member.is_paid ? (
-                              <span className="bg-green-100 text-green-800 px-2 py-1 rounded text-sm font-bold">
-                                Paid
-                              </span>
-                            ) : (
-                              <span className="bg-red-100 text-red-800 px-2 py-1 rounded text-sm font-bold">
-                                Unpaid
-                              </span>
-                            )}
-                          </td>
-
-                          {isOwner && (
-                            <td className="border p-3">
-                              {member.status === "pending" && (
-                                <div className="flex gap-2 mb-2">
-                                  <button
-                                    onClick={() => approveMember(member)}
-                                    className="px-3 py-2 rounded text-white text-sm font-semibold bg-green-500 hover:bg-green-600"
-                                  >
-                                    Approve
-                                  </button>
-
-                                  <button
-                                    onClick={() => denyMember(member)}
-                                    className="px-3 py-2 rounded text-white text-sm font-semibold bg-red-500 hover:bg-red-600"
-                                  >
-                                    Deny
-                                  </button>
-                                </div>
-                              )}
-
-                              {member.status === "approved" && (
-                                <button
-                                  onClick={() => togglePaid(member)}
-                                  className={`px-3 py-2 rounded text-white text-sm font-semibold ${
-                                    member.is_paid
-                                      ? "bg-red-500 hover:bg-red-600"
-                                      : "bg-green-500 hover:bg-green-600"
-                                  }`}
-                                >
-                                  {member.is_paid ? "Mark Unpaid" : "Mark Paid"}
-                                </button>
-                              )}
-
-                              {member.status === "denied" && (
-                                <button
-                                  onClick={() => approveMember(member)}
-                                  className="px-3 py-2 rounded text-white text-sm font-semibold bg-green-500 hover:bg-green-600"
-                                >
-                                  Approve Again
-                                </button>
-                              )}
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {!isOwner && (
-                  <p className="text-sm text-gray-500 mt-4">
-                    Only the group owner can approve members and change paid
-                    status.
-                  </p>
-                )}
-              </>
-            )}
-          </div>
-        </div>
+        <Link
+          href="/make-picks"
+          className="block rounded-2xl bg-emerald-600 py-4 text-center text-lg font-bold text-white shadow-sm transition-colors hover:bg-emerald-700"
+        >
+          Make your picks →
+        </Link>
       </main>
     </div>
   );

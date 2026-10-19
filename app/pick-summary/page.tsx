@@ -1,8 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
+import PageHeader from "@/components/PageHeader";
+import { getTeamStyle } from "@/lib/teams";
+import { computeSplits, sortSplits, type SplitPick, type SplitSort } from "@/lib/pickSplit";
+import { splitMemberships, type GroupInfo } from "@/lib/groups";
+import { loadMemberships } from "@/lib/groupActions";
 
 type Game = {
   id: string;
@@ -12,653 +17,291 @@ type Game = {
   week: number;
   winner?: string | null;
   status?: string | null;
+  homeScore?: number | null;
+  awayScore?: number | null;
 };
 
-type Pick = {
-  user_id: string;
-  game_id: string;
-  selected_team: string;
-  lock_time: string;
-  total_points?: number | null;
-};
-
-type Profile = {
-  user_id: string;
-  username: string;
-  first_name: string;
-  last_name: string;
-  email: string;
-  is_admin?: boolean;
-};
-
-type PickemGroup = {
-  id: string;
-  name: string;
-  invite_code: string;
-  owner_user_id: string;
-  season_year: number;
-  is_active: boolean;
-};
-
-type GamePickStats = {
-  gameId: string;
-  homeTeam: string;
-  awayTeam: string;
-  homePicks: number;
-  awayPicks: number;
-  homePercentage: number;
-  awayPercentage: number;
-  totalPicks: number;
-  winner?: string | null;
-  status?: string | null;
-};
+const EVERYONE = "everyone";
 
 export default function PickPercentagesPage() {
   const router = useRouter();
 
-  const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-
-  const [games, setGames] = useState<Game[]>([]);
-  const [picks, setPicks] = useState<Pick[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [activeWeek, setActiveWeek] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
-
   const [seasonYear, setSeasonYear] = useState(2026);
-  const [myGroups, setMyGroups] = useState<PickemGroup[]>([]);
-  const [selectedGroupId, setSelectedGroupId] = useState<string>("");
-  const [groupUserIds, setGroupUserIds] = useState<string[]>([]);
-
-  const [gameStats, setGameStats] = useState<GamePickStats[]>([]);
-  const [sortBy, setSortBy] = useState<"percentage" | "popularity" | "team">(
-    "percentage"
-  );
-
-  useEffect(() => {
-    loadPage();
-  }, []);
+  const [games, setGames] = useState<Game[]>([]);
+  const [activeWeek, setActiveWeek] = useState<number | null>(null);
+  const [weekPicks, setWeekPicks] = useState<SplitPick[]>([]);
+  const [myGroups, setMyGroups] = useState<GroupInfo[]>([]);
+  const [audience, setAudience] = useState<string>(EVERYONE);
+  const [groupUserIds, setGroupUserIds] = useState<string[] | undefined>(undefined);
+  const [sortBy, setSortBy] = useState<SplitSort>("time");
+  const [myPicks, setMyPicks] = useState<Record<string, string>>({});
+  const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (selectedGroupId) {
-      fetchApprovedGroupMembers(selectedGroupId);
-    }
-  }, [selectedGroupId]);
+    const load = async () => {
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user) {
+          router.push("/login");
+          return;
+        }
+        setUserId(user.id);
 
-  useEffect(() => {
-    if (games.length > 0 && activeWeek && groupUserIds.length > 0) {
-      calculatePickPercentages();
-    }
-  }, [games, picks, activeWeek, groupUserIds]);
+        const { data: config } = await supabase.from("season_config").select("season_year").single();
+        const season = config?.season_year ?? 2026;
+        setSeasonYear(season);
 
-  const navItems = [
-    { href: "/", label: "Home", icon: "🏠" },
-    { href: "/make-picks", label: "Make Picks", icon: "🏈" },
-    { href: "/all-picks", label: "View All Picks", icon: "📊" },
-    { href: "/pick-summary", label: "Pick Percentages", icon: "📈" },
-    { href: "/standings", label: "Standings", icon: "🏆" },
-    { href: "/pickem-groups", label: "Pick'em Groups", icon: "👥" },
-    { href: "/rules", label: "Rules", icon: "📋" },
-    { href: "/profile", label: "Profile", icon: "👤" },
-  ];
+        const { joined } = splitMemberships(await loadMemberships(user.id), season);
+        setMyGroups(joined);
 
-  const loadPage = async () => {
-    try {
-      setLoading(true);
+        const { data: gameData } = await supabase
+          .from("games")
+          .select("id, week, start_time, team_a, team_b, winner, status, home_score, away_score")
+          .eq("season", season)
+          .order("start_time", { ascending: true });
 
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+        const mapped: Game[] = (gameData || [])
+          .filter((g: any) => g.team_a && g.team_b && g.team_a.toLowerCase() !== "bye" && g.team_b.toLowerCase() !== "bye")
+          .map((g: any) => ({
+            id: g.id,
+            week: g.week,
+            startTime: g.start_time,
+            homeTeam: g.team_a,
+            awayTeam: g.team_b,
+            winner: g.winner,
+            status: g.status,
+            homeScore: g.home_score,
+            awayScore: g.away_score,
+          }));
+        setGames(mapped);
 
-      if (!user) {
-        router.push("/login");
-        return;
+        // Current week = first week with a game still to be played
+        const weeks = Array.from(new Set(mapped.map((g) => g.week))).sort((a, b) => a - b);
+        const now = Date.now();
+        setActiveWeek(
+          weeks.find((w) => mapped.some((g) => g.week === w && (new Date(g.startTime).getTime() > now || g.status !== "Final"))) ??
+            weeks[weeks.length - 1] ??
+            1
+        );
+      } catch (err) {
+        console.error("Error loading pick summary:", err);
+      } finally {
+        setLoading(false);
       }
+    };
+    load();
+  }, [router]);
 
-      setCurrentUserId(user.id);
-      setUserEmail(user.email || null);
+  // Picks for just the week on screen (keeps us well under Supabase's 1,000-row limit)
+  useEffect(() => {
+    if (!activeWeek) return;
+    const ids = games.filter((g) => g.week === activeWeek).map((g) => g.id);
+    if (ids.length === 0) return;
+    supabase
+      .from("game_picks")
+      .select("user_id, game_id, selected_team")
+      .in("game_id", ids)
+      .then(({ data, error }) => {
+        if (error) console.error("Error loading picks:", error);
+        const rows = data || [];
+        setWeekPicks(rows);
+        const mine: Record<string, string> = {};
+        rows.filter((p) => p.user_id === userId).forEach((p) => (mine[p.game_id] = p.selected_team));
+        setMyPicks(mine);
+      });
+  }, [activeWeek, games, userId]);
 
-      const { data: config } = await supabase
-        .from("season_config")
-        .select("season_year")
-        .single();
-
-      const activeSeason = config?.season_year ?? 2026;
-      setSeasonYear(activeSeason);
-
-      await fetchUserProfile(user.id);
-      await fetchGroups(user.id, activeSeason);
-      await fetchGamesAndPicks(activeSeason);
-    } catch (err) {
-      console.error("Error loading pick summary:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchUserProfile = async (userId: string) => {
-    const { data } = await supabase
-      .from("profiles")
-      .select("is_admin")
-      .eq("user_id", userId)
-      .single();
-
-    setIsAdmin(data?.is_admin || false);
-  };
-
-  const fetchGroups = async (userId: string, activeSeason: number) => {
-    const { data, error } = await supabase
-      .from("group_members")
-      .select(`
-        group_id,
-        status,
-        groups (
-          id,
-          name,
-          invite_code,
-          owner_user_id,
-          season_year,
-          is_active
-        )
-      `)
-      .eq("user_id", userId)
-      .eq("status", "approved");
-
-    if (error) throw error;
-
-    const groups =
-      data
-        ?.map((row: any) => row.groups)
-        .filter(
-          (group: PickemGroup | null) =>
-            group &&
-            group.is_active &&
-            group.season_year === activeSeason
-        ) || [];
-
-    setMyGroups(groups);
-
-    if (groups.length > 0) {
-      setSelectedGroupId(groups[0].id);
-    }
-  };
-
-  const fetchApprovedGroupMembers = async (groupId: string) => {
-    const { data, error } = await supabase
-      .from("group_members")
-      .select("user_id")
-      .eq("group_id", groupId)
-      .eq("status", "approved");
-
-    if (error) {
-      console.error("Error fetching group members:", error);
-      setGroupUserIds([]);
+  // Approved members of the chosen group
+  useEffect(() => {
+    if (audience === EVERYONE) {
+      setGroupUserIds(undefined);
       return;
     }
-
-    const ids = [...new Set((data || []).map((member) => member.user_id))];
-    setGroupUserIds(ids);
-  };
-
-  const fetchGamesAndPicks = async (activeSeason: number) => {
-    const { data: profileData } = await supabase
-      .from("profiles")
-      .select("user_id, username, first_name, last_name, email, is_admin");
-
-    setProfiles(profileData || []);
-
-    const { data: gameData } = await supabase
-      .from("games")
-      .select("*")
-      .eq("season", activeSeason)
-      .order("start_time", { ascending: true });
-
-      console.log("ACTIVE SEASON:", activeSeason);
-      console.log("GAMES LOADED:", gameData?.map(g => ({
-        season: g.season,
-        week: g.week,
-        team_a: g.team_a,
-        team_b: g.team_b,
-        start_time: g.start_time
-      })));
-
-    const filteredGameData = (gameData || []).filter(
-      (g: any) =>
-        g.team_a &&
-        g.team_b &&
-        g.team_a.trim() !== "" &&
-        g.team_b.trim() !== "" &&
-        g.team_a.toLowerCase() !== "bye" &&
-        g.team_b.toLowerCase() !== "bye"
-    );
-
-    const mappedGames: Game[] = filteredGameData.map((g: any) => ({
-      id: g.id,
-      week: g.week,
-      startTime: g.start_time,
-      homeTeam: g.team_a,
-      awayTeam: g.team_b,
-      winner: g.winner,
-      status: g.status,
-    }));
-
-    const sortedGames = mappedGames.sort(
-      (a, b) =>
-        new Date(a.startTime).getTime() -
-        new Date(b.startTime).getTime()
-    );
-
-    setGames(sortedGames);
-
-    const { data: pickData, error: pickError } = await supabase
-      .from("game_picks")
-      .select(`
-        *,
-        games!inner(id, season, week)
-      `)
-      .eq("games.season", activeSeason);
-
-    if (pickError) {
-      console.error("Error fetching picks:", pickError);
-    }
-
-    setPicks(pickData || []);
-
-    const weekNumbers = Array.from(
-        new Set(sortedGames.map((game) => game.week))
-      ).sort((a, b) => a - b);
-
-      const now = new Date();
-      let selectedWeek = weekNumbers[0] || 1;
-
-      for (const week of weekNumbers) {
-        const weekGames = sortedGames.filter((game) => game.week === week);
-
-        const hasUpcomingOrLive = weekGames.some((game) => {
-          const gameTime = new Date(game.startTime);
-          return gameTime > now || game.status !== "Final";
-        });
-
-        if (hasUpcomingOrLive) {
-          selectedWeek = week;
-          break;
-        }
-    }
-
-    setActiveWeek(selectedWeek);
-  };
-
-  const calculatePickPercentages = () => {
-    if (!activeWeek) return;
-
-    const weekGames = games.filter((game) => game.week === activeWeek);
-
-    const stats: GamePickStats[] = weekGames.map((game) => {
-      const groupGamePicks = picks.filter(
-        (pick) =>
-          pick.game_id === game.id &&
-          groupUserIds.includes(pick.user_id)
-      );
-
-      const totalPicks = groupGamePicks.length;
-
-      const homePicks = groupGamePicks.filter(
-        (pick) => pick.selected_team === game.homeTeam
-      ).length;
-
-      const awayPicks = groupGamePicks.filter(
-        (pick) => pick.selected_team === game.awayTeam
-      ).length;
-
-      return {
-        gameId: game.id,
-        homeTeam: game.homeTeam,
-        awayTeam: game.awayTeam,
-        homePicks,
-        awayPicks,
-        homePercentage:
-          totalPicks > 0 ? Math.round((homePicks / totalPicks) * 100) : 0,
-        awayPercentage:
-          totalPicks > 0 ? Math.round((awayPicks / totalPicks) * 100) : 0,
-        totalPicks,
-        winner: game.winner,
-        status: game.status,
-      };
-    });
-
-    setGameStats(stats);
-  };
-
-  const handleWeekSelect = (week: number) => {
-    setActiveWeek(week);
-  };
-
-  const handleGroupSelect = (groupId: string) => {
-    setSelectedGroupId(groupId);
-  };
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.push("/login");
-  };
-
-  const getSortedGameStats = () => {
-    return [...gameStats].sort((a, b) => {
-      if (sortBy === "percentage") {
-        const aMax = Math.max(a.homePercentage, a.awayPercentage);
-        const bMax = Math.max(b.homePercentage, b.awayPercentage);
-        return bMax - aMax;
-      }
-
-      if (sortBy === "popularity") {
-        return b.totalPicks - a.totalPicks;
-      }
-
-      return a.homeTeam.localeCompare(b.homeTeam);
-    });
-  };
-
-  const getDisplayName = (userId: string) => {
-    const profile = profiles.find((p) => p.user_id === userId);
-
-    if (!profile) return userId;
-
-    if (profile.first_name || profile.last_name) {
-      return `${profile.first_name || ""} ${profile.last_name || ""}`.trim();
-    }
-
-    return profile.username || profile.email;
-  };
-
-  const gamesByWeek: Record<number, Game[]> = {};
-  games.forEach((game) => {
-    if (!gamesByWeek[game.week]) gamesByWeek[game.week] = [];
-    gamesByWeek[game.week].push(game);
-  });
-
-  const selectedGroup = myGroups.find((group) => group.id === selectedGroupId);
-
-  const totalGroupPicksThisWeek = picks.filter(
-    (pick) =>
-      groupUserIds.includes(pick.user_id) &&
-      games.some(
-        (game) => game.id === pick.game_id && game.week === activeWeek
-      )
-  ).length;
+    supabase
+      .from("group_members")
+      .select("user_id")
+      .eq("group_id", audience)
+      .eq("status", "approved")
+      .then(({ data }) => setGroupUserIds((data || []).map((m) => m.user_id)));
+  }, [audience]);
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <p className="text-xl text-gray-700">Loading pick percentages...</p>
-      </div>
-    );
+    return <div className="flex min-h-screen items-center justify-center bg-page text-slate-700">Loading pick percentages...</div>;
   }
 
-  if (myGroups.length === 0) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <main className="p-6 max-w-4xl mx-auto text-center">
-          <h1 className="text-3xl font-bold mb-4">Pick Percentages</h1>
-          <p className="text-gray-600 mb-6">
-            You are not approved in any pick'em groups yet.
-          </p>
-          <button
-            onClick={() => router.push("/pickem-groups")}
-            className="bg-blue-600 text-white px-5 py-3 rounded-lg font-semibold"
-          >
-            Go to Pick'em Groups
-          </button>
-        </main>
-      </div>
-    );
-  }
+  const weeks = Array.from(new Set(games.map((g) => g.week))).sort((a, b) => a - b);
+  const weekGames = games.filter((g) => g.week === activeWeek);
+  const splits = sortSplits(computeSplits(weekGames, weekPicks, groupUserIds), sortBy);
+  const players = new Set(weekPicks.filter((p) => !groupUserIds || groupUserIds.includes(p.user_id)).map((p) => p.user_id)).size;
+  const finals = splits.filter((s) => s.favoriteWon !== null);
+  const favoritesWon = finals.filter((s) => s.favoriteWon).length;
+
+  const chip = (selected: boolean) =>
+    `shrink-0 rounded-full px-4 py-2 text-sm font-bold transition-colors ${
+      selected ? "bg-ink text-white shadow-sm" : "border border-slate-200 bg-white text-slate-800 hover:border-sky-400"
+    }`;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
-        <div className="flex items-center justify-between p-4">
-          <h1 className="text-2xl font-bold text-gray-800">Pick Percentages</h1>
+    <div className="min-h-screen bg-page">
+      <PageHeader title="Pick Percentages" subtitle={`Season ${seasonYear} · Week ${activeWeek ?? "–"}`} icon="📈" />
 
-          <div className="flex items-center gap-4">
-            <div className="hidden md:block text-right">
-              <p className="text-sm font-medium text-gray-700">
-                {userEmail}
-              </p>
-              <p className="text-xs text-gray-500">
-                {isAdmin ? "Admin" : "User"} · Season {seasonYear}
-              </p>
+      <main className="mx-auto -mt-10 max-w-3xl space-y-4 px-4 pb-6">
+        {/* Summary */}
+        <section className="grid grid-cols-3 gap-3">
+          {[
+            { n: players, label: "Players picked" },
+            { n: weekGames.length, label: "Games" },
+            { n: finals.length ? `${favoritesWon}/${finals.length}` : "–", label: "Favorites won" },
+          ].map((s) => (
+            <div key={s.label} className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="text-2xl font-extrabold text-slate-900">{s.n}</div>
+              <div className="text-xs font-semibold text-slate-700">{s.label}</div>
             </div>
+          ))}
+        </section>
 
-            <button
-              onClick={handleLogout}
-              className="bg-red-500 text-white px-3 py-2 rounded text-sm font-medium hover:bg-red-600"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-
-        <div className="px-4 pb-4 flex gap-2 overflow-x-auto">
-          {navItems.map((item) => (
-            <button
-              key={item.href}
-              onClick={() => router.push(item.href)}
-              className={`px-3 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${
-                item.href === "/pick-summary"
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-              }`}
-            >
-              {item.icon} {item.label}
+        {/* Who to count */}
+        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1">
+          <button onClick={() => setAudience(EVERYONE)} className={chip(audience === EVERYONE)}>
+            Everyone
+          </button>
+          {myGroups.map((g) => (
+            <button key={g.id} onClick={() => setAudience(g.id)} className={chip(audience === g.id)}>
+              👥 {g.name}
             </button>
           ))}
         </div>
-      </header>
 
-      <main className="p-6 max-w-6xl mx-auto">
-        <div className="text-center mb-8">
-          <h2 className="text-4xl font-bold text-gray-800 mb-3">
-            Pick Percentages
-          </h2>
-          <p className="text-gray-600 text-lg">
-            Showing picks only from approved members in your selected group.
-          </p>
+        {/* Weeks */}
+        <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1">
+          {weeks.map((w) => (
+            <button key={w} onClick={() => setActiveWeek(w)} className={chip(activeWeek === w)}>
+              Week {w}
+            </button>
+          ))}
         </div>
 
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">
-                Group
-              </label>
-              <select
-                value={selectedGroupId}
-                onChange={(e) => handleGroupSelect(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-4 py-3"
-              >
-                {myGroups.map((group) => (
-                  <option key={group.id} value={group.id}>
-                    {group.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="bg-blue-50 rounded-lg p-4 text-center">
-              <div className="text-2xl font-bold text-blue-600">
-                {groupUserIds.length}
-              </div>
-              <div className="text-sm text-blue-800">Approved Members</div>
-            </div>
-
-            <div className="bg-green-50 rounded-lg p-4 text-center">
-              <div className="text-2xl font-bold text-green-600">
-                {totalGroupPicksThisWeek}
-              </div>
-              <div className="text-sm text-green-800">
-                Group Picks This Week
-              </div>
-            </div>
-          </div>
-
-          {selectedGroup && (
-            <div className="mt-4 text-sm text-gray-600">
-              Selected group:{" "}
-              <span className="font-semibold text-gray-800">
-                {selectedGroup.name}
-              </span>
-            </div>
-          )}
+        {/* Sort */}
+        <div className="flex items-center gap-2 text-sm">
+          <span className="font-semibold text-slate-700">Sort:</span>
+          {(
+            [
+              ["time", "Kickoff"],
+              ["lopsided", "Most one-sided"],
+              ["closest", "Closest split"],
+            ] as [SplitSort, string][]
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setSortBy(key)}
+              className={`rounded-full px-3 py-1 font-semibold ${
+                sortBy === key ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-300" : "text-slate-700 hover:bg-white/60"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
-        <div className="flex gap-2 mb-6 overflow-x-auto">
-          {Object.keys(gamesByWeek).map((week) => {
-            const weekNum = Number(week);
+        {/* Games */}
+        <div className="space-y-3">
+          {splits.map((s) => {
+            const g = weekGames.find((x) => x.id === s.gameId)!;
+            const away = getTeamStyle(s.awayTeam);
+            const home = getTeamStyle(s.homeTeam);
+            const isFinal = g.status === "Final";
+            const isLive = g.status === "InProgress";
+            const mine = myPicks[s.gameId];
 
             return (
-              <button
-                key={week}
-                onClick={() => handleWeekSelect(weekNum)}
-                className={`px-4 py-2 rounded font-semibold min-w-[100px] ${
-                  activeWeek === weekNum
-                    ? "bg-blue-600 text-white border-2 border-blue-700"
-                    : "bg-gray-100 text-gray-700 border border-gray-300 hover:bg-gray-200"
-                }`}
-              >
-                Week {week}
-              </button>
+              <article key={s.gameId} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-lg font-extrabold text-slate-900">
+                    {s.awayTeam} <span className="font-semibold text-slate-500">@</span> {s.homeTeam}
+                  </div>
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                      isFinal ? "bg-slate-200 text-slate-800" : isLive ? "bg-rose-100 text-rose-700" : "bg-sky-100 text-sky-900"
+                    }`}
+                  >
+                    {isFinal
+                      ? g.awayScore != null && g.homeScore != null
+                        ? `FINAL ${g.awayScore}–${g.homeScore}`
+                        : "FINAL"
+                      : isLive
+                      ? "LIVE"
+                      : new Date(g.startTime).toLocaleString("en-US", {
+                          timeZone: "America/Denver",
+                          weekday: "short",
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
+                  </span>
+                </div>
+
+                <div className="mt-3 flex items-end justify-between text-sm font-bold">
+                  <span className="flex items-center gap-1.5 text-slate-900">
+                    <span className="text-2xl font-black" style={{ color: away.primary }}>
+                      {s.awayPct}%
+                    </span>
+                    {isFinal && g.winner === s.awayTeam && <span className="text-emerald-600">✓</span>}
+                  </span>
+                  <span className="flex items-center gap-1.5 text-slate-900">
+                    {isFinal && g.winner === s.homeTeam && <span className="text-emerald-600">✓</span>}
+                    <span className="text-2xl font-black" style={{ color: home.primary }}>
+                      {s.homePct}%
+                    </span>
+                  </span>
+                </div>
+
+                <div className="mt-1 flex h-4 overflow-hidden rounded-full bg-slate-100">
+                  {s.totalPicks > 0 && (
+                    <>
+                      <div className="transition-all duration-500" style={{ width: `${s.awayPct}%`, background: away.primary }} />
+                      <div className="transition-all duration-500" style={{ width: `${s.homePct}%`, background: home.primary }} />
+                    </>
+                  )}
+                </div>
+
+                <div className="mt-2 flex items-center justify-between text-xs font-semibold text-slate-700">
+                  <span>
+                    {s.awayTeam} · {s.awayPicks} {s.awayPicks === 1 ? "pick" : "picks"}
+                  </span>
+                  <span>
+                    {s.homePicks} {s.homePicks === 1 ? "pick" : "picks"} · {s.homeTeam}
+                  </span>
+                </div>
+
+                {(mine || s.favoriteWon === false) && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {mine && (
+                      <span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-bold text-sky-900">
+                        You picked {mine}
+                      </span>
+                    )}
+                    {s.favoriteWon === false && (
+                      <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-900">
+                        😮 Upset: most players picked {s.favorite}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </article>
             );
           })}
         </div>
 
-        <div className="flex gap-4 mb-6 flex-wrap">
-          <button
-            onClick={() => setSortBy("percentage")}
-            className={`px-4 py-2 rounded font-semibold ${
-              sortBy === "percentage"
-                ? "bg-green-600 text-white"
-                : "bg-gray-200 text-gray-700"
-            }`}
-          >
-            Sort by Percentage
-          </button>
-
-          <button
-            onClick={() => setSortBy("popularity")}
-            className={`px-4 py-2 rounded font-semibold ${
-              sortBy === "popularity"
-                ? "bg-green-600 text-white"
-                : "bg-gray-200 text-gray-700"
-            }`}
-          >
-            Sort by Popularity
-          </button>
-
-          <button
-            onClick={() => setSortBy("team")}
-            className={`px-4 py-2 rounded font-semibold ${
-              sortBy === "team"
-                ? "bg-green-600 text-white"
-                : "bg-gray-200 text-gray-700"
-            }`}
-          >
-            Sort by Team
-          </button>
-        </div>
-
-        <div className="grid gap-6">
-          {getSortedGameStats().map((game) => (
-            <div
-              key={game.gameId}
-              className="bg-white rounded-lg shadow-sm border border-gray-200 p-6"
-            >
-              <div className="flex justify-between items-center mb-4 gap-3">
-                <h3 className="text-xl font-bold text-gray-800">
-                  {game.awayTeam} @ {game.homeTeam}
-                </h3>
-
-                <span
-                  className={`px-2 py-1 rounded text-xs font-semibold ${
-                    game.status === "Final"
-                      ? "bg-green-100 text-green-800"
-                      : game.status === "InProgress"
-                      ? "bg-red-100 text-red-800"
-                      : "bg-blue-100 text-blue-800"
-                  }`}
-                >
-                  {game.status === "Final"
-                    ? "FINAL"
-                    : game.status === "InProgress"
-                    ? "LIVE"
-                    : "UPCOMING"}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="text-center">
-                  <div className="font-semibold text-gray-700 mb-2">
-                    {game.awayTeam}
-                  </div>
-                  <div className="text-3xl font-bold text-blue-600 mb-2">
-                    {game.awayPercentage}%
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-4">
-                    <div
-                      className="bg-blue-500 h-4 rounded-full"
-                      style={{ width: `${game.awayPercentage}%` }}
-                    />
-                  </div>
-                  <div className="text-sm text-gray-600 mt-2">
-                    {game.awayPicks} of {game.totalPicks} group picks
-                  </div>
-                </div>
-
-                <div className="text-center">
-                  <div className="font-semibold text-gray-700 mb-2">
-                    {game.homeTeam}
-                  </div>
-                  <div className="text-3xl font-bold text-red-600 mb-2">
-                    {game.homePercentage}%
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-4">
-                    <div
-                      className="bg-red-500 h-4 rounded-full"
-                      style={{ width: `${game.homePercentage}%` }}
-                    />
-                  </div>
-                  <div className="text-sm text-gray-600 mt-2">
-                    {game.homePicks} of {game.totalPicks} group picks
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-4 pt-4 border-t border-gray-200 text-center text-sm text-gray-600">
-                Total group players voted:{" "}
-                <span className="font-semibold text-gray-800">
-                  {game.totalPicks}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-8 bg-white rounded-lg border border-gray-200 p-5">
-          <h3 className="text-xl font-bold text-gray-800 mb-3">
-            Group Members Counted
-          </h3>
-
-          <div className="flex flex-wrap gap-2">
-            {groupUserIds.map((id) => (
-              <span
-                key={id}
-                className="bg-gray-100 text-gray-800 px-3 py-2 rounded-lg text-sm"
-              >
-                {getDisplayName(id)}
-              </span>
-            ))}
-          </div>
-        </div>
+        {myGroups.length === 0 && (
+          <p className="text-center text-sm text-slate-700">
+            Join a pick'em group to see how your group picked.{" "}
+            <button onClick={() => router.push("/pickem-groups")} className="font-bold text-sky-800 underline">
+              Groups
+            </button>
+          </p>
+        )}
       </main>
     </div>
   );

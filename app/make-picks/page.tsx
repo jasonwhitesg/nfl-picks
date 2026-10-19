@@ -1,8 +1,12 @@
 "use client";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useLiveScores } from "@/lib/useLiveScores";
+import GameDetailSheet from "@/components/GameDetailSheet";
+import PicksLogo from "@/components/PicksLogo";
+import { periodLabel } from "@/lib/espnLive";
 type Game = {
   id: string;
   homeTeam: string;
@@ -29,10 +33,21 @@ const MakePicksPage = () => {
   const [userId, setUserId] = useState<string | null>(null);
   const [mondayNightTotals, setMondayNightTotals] = useState<MondayNightTotals>({});
   const [savingScore, setSavingScore] = useState<string | null>(null);
-  const [userSelectedWeek, setUserSelectedWeek] = useState<boolean>(false);
+  // A ref (not state) so the 30-second refresh always sees the latest choice
+  const userSelectedWeek = useRef(false);
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [headerExpanded, setHeaderExpanded] = useState(false);
   const [selectedSeason, setSelectedSeason] = useState<number>(2026);
+  const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
+  // Live scores, clock and win % for the week on screen
+  const live = useLiveScores(selectedSeason, activeWeek);
+  // Keep the selected week chip in view (only when the week changes)
+  const weekChipsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const row = weekChipsRef.current;
+    const chip = row?.querySelector<HTMLElement>("[data-selected]");
+    if (row && chip) row.scrollLeft = chip.offsetLeft - row.clientWidth / 2 + chip.clientWidth / 2;
+  }, [activeWeek, games.length]);
   // Update now every second for real-time countdown
   useEffect(() => {
     const interval = setInterval(() => setNow(new Date()), 1000);
@@ -154,7 +169,7 @@ const MakePicksPage = () => {
     });
     setGames(mapped);
     // Kickoff times determine the displayed week even if old statuses are stale.
-    if (!userSelectedWeek) {
+    if (!userSelectedWeek.current) {
       const weekNumbers = Array.from(new Set(mapped.map(g => g.week))).sort((a, b) => a - b);
       const currentWeek = weekNumbers.find(week =>
         mapped.some(game => game.week === week && new Date(game.start_time).getTime() > Date.now())
@@ -171,12 +186,9 @@ const MakePicksPage = () => {
   return () => clearInterval(interval);
 }, [userId, selectedSeason]);
   const handleWeekSelect = (week: number) => {
-    setUserSelectedWeek(true);
+    userSelectedWeek.current = true;
     setActiveWeek(week);
   };
-  useEffect(() => {
-    setUserSelectedWeek(false);
-  }, []);
   // Find the earliest Sunday game at or after 2:00 PM (14:00) for the current week
   const getWeekLockTimeForCurrentWeek = (): Date | null => {
     if (!activeWeek) return null;
@@ -503,564 +515,434 @@ const getTeamStyle = (team?: string | null) => {
     if (!gamesByWeek[g.week]) gamesByWeek[g.week] = [];
     gamesByWeek[g.week].push(g);
   });
-  if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center">Loading...</div>;
-  const maxWeek = games.length > 0 ? Math.max(...games.map((g) => g.week)) : 0;
-  const currentWeekNum = activeWeek ?? 1;
-  const getWeekStatusColor = (week: number) => {
-  const weekGames = gamesByWeek[week] || [];
-  if (activeWeek === week) {
-    return "bg-green-600 text-white border-green-700";
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-page text-slate-600">Loading...</div>
+    );
   }
-  const allGamesFinal =
-    weekGames.length > 0 && weekGames.every((g) => g.status === "Final");
-  if (allGamesFinal) {
-    return "bg-red-500 text-white border-red-600";
-  }
-  return "bg-blue-500 text-white border-blue-600";
-};
-  const navItems = [
-    { href: "/", label: "Home", icon: "🏠" },
-    { href: "/all-picks", label: "View All Picks", icon: "📊" },
-    { href: "/pick-summary", label: "Pick Percentages", icon: "📈" },
-    { href: "/standings", label: "Standings", icon: "🏆" },
-    { href: "/pickem-groups", label: "Pick'em Groups", icon: "👥" },
-    { href: "/rules", label: "Rules", icon: "📋" },
-    { href: "/profile", label: "Profile", icon: "👤" },
-  ];
-  return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-50">
-        <div className="flex items-center justify-between p-4">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => setHeaderExpanded(!headerExpanded)}
-              className="p-2 rounded-lg hover:bg-gray-200 transition-colors flex items-center gap-2 bg-gray-100 border border-gray-300"
+
+  const weekNumbers = Array.from(new Set(games.map((g) => g.week))).sort((a, b) => a - b);
+  const weekGames = activeWeek ? gamesByWeek[activeWeek] || [] : [];
+  const pickedCount = weekGames.filter((g) => picks[g.id]).length;
+  const weekLockTime = getWeekLockTimeForCurrentWeek();
+  const lockGame = weekLockTime
+    ? weekGames.find((g) => new Date(g.start_time).getTime() === weekLockTime.getTime())
+    : undefined;
+  const cleanLockMessage = (msg: string) => msg.replace(/^⏰\s*/, "");
+
+  const countdown = (ms: number) => {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return d > 0 ? `${d}d ${h}h ${m}m` : `${h}h ${String(m).padStart(2, "0")}m ${String(sec).padStart(2, "0")}s`;
+  };
+
+  // When a game's pick locks: its own kickoff, or the Sunday 2 PM group lock
+  // for late-Sunday and Monday games (same rule as getCountdown above)
+  const lockTimeFor = (g: Game): Date => {
+    const kickoff = new Date(g.start_time);
+    const day = kickoff.getDay();
+    if (weekLockTime && ((day === 0 && kickoff.getHours() >= 14) || day === 1)) return weekLockTime;
+    return kickoff;
+  };
+
+  const clock = (ms: number) => {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const d = Math.floor(s / 86400);
+    const hms = [Math.floor((s % 86400) / 3600), Math.floor((s % 3600) / 60), s % 60]
+      .map((n) => String(n).padStart(2, "0"))
+      .join(":");
+    return d > 0 ? `${d}d ${hms}` : hms;
+  };
+
+  const renderGame = (g: Game) => {
+    const locked = isLocked(g.start_time);
+    const pick = picks[g.id];
+    const liveGame = live[g.id];
+    const state = liveGame?.state ?? (g.status === "Final" ? "post" : g.status === "InProgress" ? "in" : "pre");
+    const isFinal = state === "post";
+    const isLive = state === "in";
+    const isMondayNight = g.is_monday_night;
+    const homeScore = liveGame?.home.score ?? g.home_score ?? null;
+    const awayScore = liveGame?.away.score ?? g.away_score ?? null;
+    const currentTotal = mondayNightTotals[g.id];
+    const userHasSetTotal = currentTotal !== null && currentTotal !== undefined && currentTotal > 0;
+    const actualTotal = homeScore != null && awayScore != null ? homeScore + awayScore : null;
+    const needsTotalFirst = isMondayNight && !locked && !userHasSetTotal;
+    const winner = isFinal ? g.winner ?? null : null;
+    const homePct = isLive ? liveGame?.homeWinPct ?? null : null;
+
+    const side = (team: string, label: "Away" | "Home", score: number | null) => {
+      const selected = pick === team;
+      const otherPicked = !!pick && !selected;
+      const style = getTeamStyle(team);
+      const correct = isFinal && selected && winner === team;
+      const wrong = isFinal && selected && winner !== team;
+      const disabled = locked || needsTotalFirst;
+
+      return (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => selectPick(g.id, team, g.start_time, isMondayNight)}
+          aria-pressed={selected}
+          className={`relative flex flex-1 flex-col items-center justify-center gap-1 px-3 py-6 transition-all duration-300 ${
+            selected ? "z-10 scale-[1.02] shadow-lg" : ""
+          } ${otherPicked ? "opacity-45" : ""} ${disabled ? "cursor-default" : "cursor-pointer hover:bg-slate-50"}`}
+          style={
+            selected
+              ? { background: `linear-gradient(145deg, ${style.primary}, ${style.secondary})`, color: style.text }
+              : { background: "#ffffff", color: "#0f172a" }
+          }
+        >
+          <span className={`text-[11px] font-bold uppercase tracking-widest ${selected ? "opacity-90" : "text-slate-600"}`}>
+            {label}
+          </span>
+          <span className="text-4xl font-black tracking-tight">{team}</span>
+          {state !== "pre" && (
+            <span className={`text-2xl font-extrabold tabular-nums ${selected ? "" : "text-slate-800"}`}>
+              {score ?? "–"}
+            </span>
+          )}
+          {selected && (
+            <span
+              className={`mt-1 rounded-full px-2.5 py-0.5 text-[11px] font-bold ${
+                correct
+                  ? "bg-emerald-500 text-white"
+                  : wrong
+                  ? "bg-rose-600 text-white"
+                  : "bg-white/25 backdrop-blur"
+              }`}
             >
-              <span className="text-xl text-gray-800">{headerExpanded ? "✕" : "☰"}</span>
-              <span className="font-semibold text-gray-800 hidden sm:block">
-                {headerExpanded ? "Close Menu" : "Menu"}
-              </span>
-            </button>
-            <h1 className="text-2xl font-bold text-gray-800">NFL Weekly Picks</h1>
+              {correct ? "✓ Correct" : wrong ? "✗ Missed" : "Your pick"}
+            </span>
+          )}
+        </button>
+      );
+    };
+
+    return (
+      <article
+        key={g.id}
+        className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-md"
+      >
+        {/* Top line: kickoff + lock status */}
+        <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-2.5">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+            {formatTime(g.start_time)} MT
+            {isMondayNight && (
+              <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-bold text-indigo-700">MNF</span>
+            )}
           </div>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold">
-                {userEmail?.charAt(0).toUpperCase()}
-              </div>
-              <div className="hidden md:block text-right">
-                <p className="text-sm font-medium text-gray-700">{userEmail}</p>
-                <p className="text-xs text-gray-500">{isAdmin ? 'Admin' : 'User'}</p>
-              </div>
-            </div>
-            <button
-              onClick={handleLogout}
-              className="bg-red-500 text-white px-3 py-2 rounded text-sm font-medium hover:bg-red-600 transition-colors"
-            >
-              Logout
-            </button>
-          </div>
+          {isLive ? (
+            <span className="flex items-center gap-1.5 rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-bold text-rose-700">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-rose-500" />
+              {liveGame ? `${periodLabel(liveGame.period)} ${liveGame.clock ?? ""}`.trim() : "LIVE"}
+            </span>
+          ) : isFinal ? (
+            <span className="rounded-full bg-slate-200 px-2.5 py-0.5 text-xs font-bold text-slate-800">
+              {liveGame?.detail?.toUpperCase() || "FINAL"}
+            </span>
+          ) : locked ? (
+            <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-800">🔒 Locked</span>
+          ) : (
+            <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-bold text-emerald-800">Open</span>
+          )}
         </div>
-        {/* Navigation Panel */}
-        {headerExpanded && (
-          <div className="absolute top-full left-0 w-80 bg-white border-b border-r border-gray-200 shadow-lg z-40">
-            <div className="p-6">
-              <div className="mb-6">
-                <h2 className="text-xl font-bold text-gray-800 mb-2">Navigation</h2>
-                <p className="text-sm text-gray-600">Quick access to all features</p>
-              </div>
-              <div className="grid grid-cols-1 gap-3">
-                {navItems.map((item) => (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className="flex items-center gap-4 p-4 rounded-lg bg-gray-50 hover:bg-blue-50 hover:text-blue-700 transition-all duration-200 group border border-gray-200 hover:border-blue-200"
-                    onClick={() => setHeaderExpanded(false)}
+
+        {/* The two "pages": away | home */}
+        <div className="relative flex">
+          {side(g.awayTeam, "Away", awayScore)}
+          {/* Spine */}
+          <div className="pointer-events-none absolute inset-y-3 left-1/2 z-20 w-px -translate-x-1/2 bg-slate-200" />
+          <div className="pointer-events-none absolute left-1/2 top-1/2 z-30 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-xs font-bold text-slate-600 shadow-sm">
+            @
+          </div>
+          {side(g.homeTeam, "Home", homeScore)}
+        </div>
+
+        {/* Live win % */}
+        {homePct !== null && (
+          <div className="px-4 pt-3">
+            <div className="mb-1 flex justify-between text-[11px] font-bold text-slate-700">
+              <span>{Math.round(100 - homePct)}%</span>
+              <span className="font-semibold text-slate-600">chance to win</span>
+              <span>{Math.round(homePct)}%</span>
+            </div>
+            <div className="flex h-2 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="transition-all duration-700"
+                style={{ width: `${100 - homePct}%`, background: getTeamStyle(g.awayTeam).primary }}
+              />
+              <div
+                className="transition-all duration-700"
+                style={{ width: `${homePct}%`, background: getTeamStyle(g.homeTeam).primary }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Monday Night total */}
+        {isMondayNight && (
+          <div className="mx-4 mt-3 rounded-2xl bg-indigo-50 p-3">
+            {!locked && !isFinal ? (
+              <>
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-sm font-bold text-indigo-900">Monday total points</span>
+                  {!userHasSetTotal && (
+                    <span className="text-xs font-semibold text-indigo-700">Set this before picking</span>
+                  )}
+                </div>
+                <div className="flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleMondayNightTotalChange(g.id, String(Math.max(1, (currentTotal ?? 45) - 1)))}
+                    className="h-11 w-11 rounded-xl bg-white text-xl font-bold text-indigo-900 shadow-sm hover:bg-indigo-100"
+                    aria-label="Lower total"
                   >
-                    <span className="text-2xl group-hover:scale-110 transition-transform">
-                      {item.icon}
-                    </span>
-                    <div className="flex-1">
-                      <div className="font-semibold text-gray-800 group-hover:text-blue-800">
-                        {item.label}
-                      </div>
-                    </div>
-                    <span className="text-gray-400 group-hover:text-blue-500 transition-colors">→</span>
-                  </Link>
-                ))}
-              </div>
-              <div className="mt-6 pt-6 border-t border-gray-200">
-                <h3 className="font-semibold text-gray-800 mb-3">Current Week Stats</h3>
-                <div className="grid grid-cols-3 gap-3 text-center">
-                  <div className="bg-blue-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-blue-600">
-                      {activeWeek ? (gamesByWeek[activeWeek]?.length || 0) : 0}
-                    </div>
-                    <div className="text-xs text-blue-800">Games</div>
-                  </div>
-                  <div className="bg-green-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-green-600">
-                      {activeWeek ? (gamesByWeek[activeWeek]?.filter(g => picks[g.id]).length || 0) : 0}
-                    </div>
-                    <div className="text-xs text-green-800">Your Picks</div>
-                  </div>
-                  <div className="bg-purple-50 rounded-lg p-3">
-                    <div className="text-xl font-bold text-purple-600">{activeWeek || currentWeekNum}</div>
-                    <div className="text-xs text-purple-800">Week</div>
-                  </div>
+                    −
+                  </button>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={150}
+                    value={currentTotal ?? ""}
+                    onChange={(e) => handleMondayNightTotalChange(g.id, e.target.value)}
+                    placeholder="45"
+                    disabled={savingScore === g.id}
+                    className="h-11 w-24 rounded-xl border border-indigo-200 text-center text-2xl font-extrabold text-indigo-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleMondayNightTotalChange(g.id, String(Math.min(150, (currentTotal ?? 44) + 1)))}
+                    className="h-11 w-11 rounded-xl bg-white text-xl font-bold text-indigo-900 shadow-sm hover:bg-indigo-100"
+                    aria-label="Raise total"
+                  >
+                    +
+                  </button>
                 </div>
-              </div>
-              {isAdmin && (
-                <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <span className="text-yellow-600">🔧</span>
-                    <span className="text-sm font-semibold text-yellow-800">Admin Mode Active</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </header>
-      {/* Main Content */}
-      <main className="p-6">
-        {/* Weekly Lock Indicator */}
-        {activeWeek && (
-          <div className="mb-6 p-4 bg-blue-50 border-2 border-blue-300 rounded-lg max-w-2xl mx-auto">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <span className="text-2xl">⏰</span>
+              </>
+            ) : (
+              <div className="grid grid-cols-3 text-center">
                 <div>
-                  <h3 className="font-bold text-blue-800">Week {activeWeek} Lock Rules</h3>
-                  <p className="text-sm text-blue-700">
-                    {(() => {
-                      const weekLockTime = getWeekLockTimeForCurrentWeek();
-                      if (weekLockTime) {
-                        // Get the earliest Sunday 2:00 PM game
-                        const earliestAfternoonGame = gamesByWeek[activeWeek]
-                          ?.filter(g => {
-                            const gameTime = new Date(g.start_time);
-                            return gameTime.getDay() === 0 && gameTime.getHours() >= 14;
-                          })
-                          ?.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())[0];
-                        const earliestTime = earliestAfternoonGame ? formatTime(earliestAfternoonGame.start_time) : '';
-                        return (
-                          <>
-                            • Thursday/Friday/Saturday games: Lock individually<br/>
-                            • Sunday games before 2:00 PM MST: Lock individually<br/>
-                            • All Sunday games at or after 2:00 PM MST: Lock when {earliestAfternoonGame?.awayTeam} @ {earliestAfternoonGame?.homeTeam} starts ({earliestTime})<br/>
-                            • Monday Night Football: Locks when {earliestAfternoonGame?.awayTeam} @ {earliestAfternoonGame?.homeTeam} starts
-                          </>
-                        );
-                      } else {
-                        return (
-                          <>
-                            • Thursday/Friday/Saturday games: Lock individually<br/>
-                            • Sunday games: All lock individually<br/>
-                            • Monday Night Football: Locks individually
-                          </>
-                        );
-                      }
-                    })()}
-                  </p>
+                  <div className="text-2xl font-extrabold text-indigo-900">{userHasSetTotal ? currentTotal : "—"}</div>
+                  <div className="text-[11px] font-bold uppercase tracking-wide text-indigo-700">Your total</div>
+                </div>
+                <div>
+                  <div className="text-2xl font-extrabold text-indigo-900">{state === "pre" ? "—" : actualTotal ?? "—"}</div>
+                  <div className="text-[11px] font-bold uppercase tracking-wide text-indigo-700">
+                    {isFinal ? "Actual" : "So far"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-2xl font-extrabold text-indigo-900">
+                    {userHasSetTotal && actualTotal !== null && state !== "pre"
+                      ? Math.abs((currentTotal as number) - actualTotal)
+                      : "—"}
+                  </div>
+                  <div className="text-[11px] font-bold uppercase tracking-wide text-indigo-700">
+                    {isFinal ? "Off by" : "Away from it"}
+                  </div>
                 </div>
               </div>
-              {(() => {
-                const weekLockTime = getWeekLockTimeForCurrentWeek();
-                if (!weekLockTime) {
-                  // Check if all games are finished
-                  if (isWeekComplete()) {
-                    return (
-                      <div className="bg-green-500 text-white px-4 py-2 rounded font-bold">
-                        WEEK COMPLETE
-                      </div>
-                    );
-                  }
-                  // No Sunday 2:00 PM games this week - all lock individually
-                  return (
-                    <div className="text-right">
-                      <div className="font-bold text-blue-800">Individual Locks</div>
-                      <div className="text-sm text-blue-700">All games lock individually</div>
-                    </div>
-                  );
-                }
-                const diff = weekLockTime.getTime() - now.getTime();
-                if (diff <= 0) {
-                  return (
-                    <div className="bg-red-500 text-white px-4 py-2 rounded font-bold">
-                      WEEK LOCKED
-                    </div>
-                  );
-                }
-                const hours = Math.floor(diff / (1000 * 60 * 60));
-                const mins = Math.floor((diff / (1000 * 60)) % 60);
-                const secs = Math.floor((diff / 1000) % 60);
-                return (
-                  <div className="text-right">
-                    <div className="font-bold text-blue-800">Earliest Sunday 2 PM:</div>
-                    <div className="text-lg font-bold text-blue-900">
-                      {hours}h {mins}m {secs}s
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
+            )}
           </div>
         )}
-        <div className="text-center mb-8">
-        <div className="inline-block bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-5 rounded-2xl shadow-lg">
-          <h2 className="text-4xl font-extrabold tracking-tight">
-            🏈 Make Your Picks
-          </h2>
-          <p className="text-blue-100 mt-2 text-lg font-semibold">
-            Season {selectedSeason} • Week {activeWeek ?? "-"}
-          </p>
-        </div>
-      </div>
-        {/* Week Wheel Selector */}
-        <div className="mb-8 flex justify-center">
-          <div className="bg-white border border-gray-300 rounded-2xl shadow-lg p-5 w-full max-w-md">
-            <label className="block text-lg font-extrabold text-gray-800 mb-3 text-center">
-              Select Week
-            </label>
-            <select
-              value={activeWeek ?? ""}
-              onChange={(e) => handleWeekSelect(Number(e.target.value))}
-              className={`w-full px-4 py-4 rounded-xl border-2 font-extrabold text-center text-xl focus:outline-none focus:ring-4 focus:ring-blue-300 ${getWeekStatusColor(
-                activeWeek ?? currentWeekNum
-              )}`}
-            >
-              {Array.from({ length: maxWeek }, (_, i) => i + 1).map((week) => {
-                const weekGames = gamesByWeek[week] || [];
-                const allGamesFinal =
-                  weekGames.length > 0 && weekGames.every((g) => g.status === "Final");
-                const label =
-                  activeWeek === week
-                    ? `🟢 Week ${week} Current`
-                    : allGamesFinal
-                    ? `🔴 Week ${week} Passed`
-                    : `🔵 Week ${week} Coming`;
-                return (
-                  <option key={week} value={week}>
-                    {label}
-                  </option>
-                );
-              })}
-            </select>
-            <div className="flex justify-center gap-3 mt-4 text-xs font-bold">
-              <span className="text-green-600">🟢 Current</span>
-              <span className="text-red-600">🔴 Passed</span>
-              <span className="text-blue-600">🔵 Coming</span>
-            </div>
-          </div>
-        </div>
-        {/* Games */}
-        {activeWeek &&
-          gamesByWeek[activeWeek]?.map((g) => {
-            const locked = isLocked(g.start_time);
-            const pick = picks[g.id];
-            const isFinal = g.status === "Final";
-            const isLive = g.status === "InProgress";
-            const isMondayNight = g.is_monday_night;
-            const currentTotal = mondayNightTotals[g.id];
-            const userHasSetTotal = currentTotal !== null && currentTotal !== undefined && currentTotal > 0;
-            const actualTotal = g.home_score != null && g.away_score != null ? g.home_score + g.away_score : null;
-            const pickCorrect = isFinal && pick ? (pick === g.winner ? true : false) : null;
-            const mondayNightButtonsDisabled = isMondayNight && !isFinal && !locked && !userHasSetTotal;
-            const pickedTeamStyle = getTeamStyle(pick);
-            const homeStyle = getTeamStyle(g.homeTeam);
-            const awayStyle = getTeamStyle(g.awayTeam);
-            const teamColors: Record<string, string> = {
-              ARI: "bg-red-700 text-white border-red-800",
-              ATL: "bg-red-600 text-white border-red-700",
-              BAL: "bg-purple-700 text-white border-purple-800",
-              BUF: "bg-blue-700 text-white border-blue-800",
-              CAR: "bg-sky-500 text-white border-sky-600",
-              CHI: "bg-orange-700 text-white border-orange-800",
-              CIN: "bg-orange-500 text-black border-orange-600",
-              CLE: "bg-orange-800 text-white border-orange-900",
-              DAL: "bg-blue-800 text-white border-blue-900",
-              DEN: "bg-orange-600 text-white border-orange-700",
-              DET: "bg-blue-500 text-white border-blue-600",
-              GB: "bg-green-700 text-yellow-200 border-green-800",
-              HOU: "bg-blue-900 text-white border-blue-950",
-              IND: "bg-blue-700 text-white border-blue-800",
-              JAX: "bg-teal-700 text-white border-teal-800",
-              KC: "bg-red-600 text-yellow-200 border-red-700",
-              LAC: "bg-yellow-400 text-blue-900 border-yellow-500",
-              LAR: "bg-blue-700 text-yellow-300 border-blue-800",
-              LV: "bg-gray-900 text-white border-gray-950",
-              MIA: "bg-teal-500 text-white border-teal-600",
-              MIN: "bg-purple-700 text-yellow-300 border-purple-800",
-              NE: "bg-blue-800 text-white border-blue-900",
-              NO: "bg-yellow-600 text-black border-yellow-700",
-              NYG: "bg-blue-700 text-white border-blue-800",
-              NYJ: "bg-green-700 text-white border-green-800",
-              PHI: "bg-emerald-800 text-white border-emerald-900",
-              PIT: "bg-yellow-400 text-black border-yellow-500",
-              SEA: "bg-green-500 text-blue-950 border-green-600",
-              SF: "bg-red-700 text-yellow-300 border-red-800",
-              TB: "bg-red-700 text-white border-red-800",
-              TEN: "bg-sky-700 text-white border-sky-800",
-              WAS: "bg-red-900 text-yellow-300 border-red-950",
-            };
-            const getTeamColor = (team: string) => {
-              return teamColors[team] || "bg-blue-600 text-white border-blue-700";
-            };
-            const teamBtn = (team: string) => {
-              const teamStyle = getTeamStyle(team);
-              const selected = pick === team;
-              let base =
-                "px-6 py-3 rounded-xl font-extrabold transition-all text-center min-w-[95px] border-4 shadow-lg transform";
-              if (mondayNightButtonsDisabled) {
-                return `${base} cursor-not-allowed opacity-50`;
-              }
-              if (selected && !isFinal) {
-                return `${base} scale-110 ring-4 ring-white`;
-              }
-              if (selected && isFinal) {
-                return `${base} scale-110 ring-4 ${
-                  pickCorrect ? "ring-green-300" : "ring-red-300"
-                }`;
-              }
-              if (locked && !selected) {
-                return `${base} opacity-50 cursor-not-allowed`;
-              }
-              return `${base} hover:scale-110 hover:shadow-2xl cursor-pointer`;
-            };
+
+        {/* Countdown: to the pick lock, or to kickoff once picks are locked */}
+        {state === "pre" &&
+          (() => {
+            const kickoffMs = new Date(g.start_time).getTime() - now.getTime();
+            const lockAt = lockTimeFor(g);
+            const lockMs = lockAt.getTime() - now.getTime();
+            const urgent = !locked && lockMs < 60 * 60 * 1000;
             return (
-            <div
-              key={g.id}
-              className="
-              rounded-3xl
-              p-2
-              mb-8
-              max-w-2xl
-              mx-auto
-              w-full
-              transition-all
-              duration-500
-              "
-              style={{
-                background: pick
-                  ? `linear-gradient(
-                      135deg,
-                      ${pickedTeamStyle.primary},
-                      ${pickedTeamStyle.secondary}
-                    )`
-                  : "linear-gradient(135deg,#ffffff,#f5f5f5)",
-                boxShadow: pick
-                  ? `
-                    0 0 0 10px ${pickedTeamStyle.secondary},
-                    0 0 60px ${pickedTeamStyle.primary},
-                    0 30px 70px rgba(0,0,0,.35)
-                  `
-                  : `
-                    0 20px 40px rgba(0,0,0,.18)
-                  `,
-              }}
-            >
-            <div
-              className="
-              rounded-2xl
-              p-6
-              flex
-              flex-col
-              gap-4
-              "
-              style={{
-                background: pick
-                  ? `linear-gradient(
-                      145deg,
-                      ${pickedTeamStyle.primary},
-                      ${pickedTeamStyle.secondary}
-                    )`
-                  : "#ffffff",
-                color: pick
-                  ? pickedTeamStyle.text
-                  : "#111827",
-              }}
-            >              
-                {/* Game Header */}
-                <div className="flex flex-col items-center text-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <div
-                      className="font-extrabold text-2xl sm:text-3xl tracking-wide px-5 py-3 rounded-xl shadow-lg border-2"
-                      style={{
-                        background: pick
-                          ? "rgba(255,255,255,0.18)"
-                          : "linear-gradient(135deg, #111827, #374151)",
-                        color: "#ffffff",
-                        borderColor: pick ? "rgba(255,255,255,0.45)" : "#111827",
-                        textShadow: "0 2px 4px rgba(0,0,0,0.35)",
-                      }}
-                    >
-                      {g.awayTeam} @ {g.homeTeam}
-                    </div>
-                    {isMondayNight && (
-                      <span className="bg-purple-500 text-white px-2 py-1 rounded text-xs font-bold">
-                        MNF
-                      </span>
-                    )}
+              <div
+                className={`mx-4 mt-3 flex items-center justify-between rounded-2xl px-4 py-3 ${
+                  locked ? "bg-slate-100" : urgent ? "bg-rose-50 ring-1 ring-rose-200" : "bg-emerald-50 ring-1 ring-emerald-200"
+                }`}
+              >
+                <div>
+                  <div
+                    className={`text-xs font-bold uppercase tracking-wide ${
+                      locked ? "text-slate-700" : urgent ? "text-rose-700" : "text-emerald-800"
+                    }`}
+                  >
+                    {locked ? "🔒 Locked · kickoff in" : "Picks lock in"}
                   </div>
-                  <div className="flex flex-col items-center gap-2">
-                    <div className={`font-semibold text-lg ${
-                      isLive ? "text-green-600" : isFinal ? "text-gray-800" : "text-blue-600"
-                    }`}>
-                      {isFinal ? "FINAL" : isLive ? "LIVE" : "UPCOMING"}
-                    </div>
-                  </div>
-                  {/* Final Score */}
-                  {isFinal && g.home_score !== null && g.away_score !== null && (
-                    <div className="bg-gray-100 rounded-lg px-4 py-2 mt-2">
-                      <div className="font-bold text-lg text-gray-800">
-                        Final: {g.awayTeam} {g.away_score} - {g.homeTeam} {g.home_score}
-                      </div>
-                      {g.winner && (
-                        <div className="text-sm font-semibold text-green-600 mt-1">
-                          Winner: {g.winner}
-                        </div>
-                      )}
-                      {isMondayNight && (
-                        <div className="text-sm font-semibold text-purple-600 mt-1">
-                          Actual Total Points: <span className="text-lg font-bold text-purple-800">{actualTotal}</span>
-                          {userHasSetTotal && (
-                            <span className="text-gray-800 ml-2 font-medium">
-                              (Your pick: <span className="text-lg font-bold text-purple-800">{currentTotal}</span>)
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {/* Monday Night Total Input */}
-                  {isMondayNight && !isFinal && !locked && (
-                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 mt-2 w-full">
-                      <div className="text-sm font-semibold text-purple-800 mb-3 text-center">
-                        Set Monday Night Total Points (Required before making pick)
-                      </div>
-                      <div className="flex justify-center items-center gap-3">
-                        <div className="flex flex-col items-center gap-2">
-                          <label className="text-sm font-medium text-gray-700">Total Points</label>
-                          <input
-                            type="number"
-                            min="1"
-                            max="100"
-                            value={currentTotal ?? ''}
-                            onChange={(e) => handleMondayNightTotalChange(g.id, e.target.value)}
-                            className="w-24 px-3 py-2 border-2 border-purple-300 rounded text-center font-bold text-lg text-purple-800 bg-white"
-                            placeholder="Enter total"
-                            disabled={savingScore === g.id}
-                          />
-                        </div>
-                      </div>
-                      {userHasSetTotal && (
-                        <div className="text-sm font-semibold text-purple-800 text-center mt-2">
-                          Total points set: <span className="text-lg font-bold">{currentTotal}</span> - You can now make your pick!
-                        </div>
-                      )}
-                      {!userHasSetTotal && (
-                        <div className="text-sm font-semibold text-red-600 text-center mt-2">
-                          ⚠️ You must set total points (greater than 0) before making your pick
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {/* Pick Result */}
-                  {isFinal && pick && (
-                    <div className={`rounded-lg px-4 py-2 mt-2 ${
-                      pickCorrect ? 'bg-green-100 border border-green-300' : 'bg-red-100 border border-red-300'
-                    }`}>
-                      <div className={`font-semibold ${
-                        pickCorrect ? 'text-green-800' : 'text-red-800'
-                      }`}>
-                        Your pick: {pick} - {pickCorrect ? '✓ Correct' : '✗ Incorrect'}
-                      </div>
-                      {isMondayNight && userHasSetTotal && (
-                        <div className={`text-sm mt-1 font-semibold ${
-                          currentTotal === actualTotal ? 'text-green-700' : 'text-red-700'
-                        }`}>
-                          Total Points: <span className="text-lg font-bold">{currentTotal}</span> vs Actual: <span className="text-lg font-bold">{actualTotal}</span> - 
-                          {currentTotal === actualTotal ? ' ✓ Correct' : ' ✗ Incorrect'}
-                        </div>
-                      )}
+                  {!locked && lockAt.getTime() !== new Date(g.start_time).getTime() && (
+                    <div className="text-[11px] font-medium text-slate-700">
+                      With the {lockGame ? `${lockGame.awayTeam} @ ${lockGame.homeTeam}` : "first Sunday 2 PM"} kickoff
                     </div>
                   )}
                 </div>
-                {/* Team Selection */}
-                {!isFinal && (
-                  <div className="flex justify-center items-center gap-3">
-                    <div className="flex flex-wrap justify-center gap-3">
-                      <button
-                        disabled={locked || mondayNightButtonsDisabled}
-                        onClick={() => selectPick(g.id, g.homeTeam, g.start_time, isMondayNight)}
-                        className={teamBtn(g.homeTeam)}
-                        title={mondayNightButtonsDisabled ? "Set total points first" : ""}
-                      >
-                        {g.homeTeam}
-                      </button>
-                      <button
-                        disabled={locked || mondayNightButtonsDisabled}
-                        onClick={() => selectPick(g.id, g.awayTeam, g.start_time, isMondayNight)}
-                        className={teamBtn(g.awayTeam)}
-                        title={mondayNightButtonsDisabled ? "Set total points first" : ""}
-                      >
-                        {g.awayTeam}
-                      </button>
+                <div
+                  className={`font-mono text-2xl font-extrabold tabular-nums ${
+                    locked ? "text-slate-900" : urgent ? "text-rose-700" : "text-emerald-800"
+                  }`}
+                >
+                  {clock(locked ? kickoffMs : lockMs)}
+                </div>
+              </div>
+            );
+          })()}
+
+        {/* Bottom line: status + details */}
+        <div className="flex items-center justify-between gap-3 px-4 py-3">
+          <span className="text-xs font-semibold text-slate-600">
+            {isFinal
+              ? winner
+                ? `${winner} won`
+                : "Tie game"
+              : isLive
+              ? liveGame?.downDistance ?? "In progress"
+              : pick
+              ? `You picked ${pick}`
+              : locked
+              ? "No pick made"
+              : "Tap a team to pick"}
+          </span>
+          <button
+            type="button"
+            onClick={() => setSelectedGameId(g.id)}
+            className="shrink-0 rounded-full border border-slate-300 px-3 py-1 text-xs font-bold text-slate-800 transition-colors hover:bg-slate-100"
+          >
+            Details
+          </button>
+        </div>
+      </article>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-page">
+      {/* Header */}
+      <header className="bg-ink text-white">
+        <div className="mx-auto flex max-w-2xl items-center justify-between px-4 pb-14 pt-5">
+          <div className="flex items-center gap-3">
+            <PicksLogo className="h-12 w-12" />
+            <div>
+              <h1 className="text-2xl font-extrabold leading-tight tracking-tight">Make Picks</h1>
+              <p className="text-sm text-slate-300">
+                Season {selectedSeason} · Week {activeWeek ?? "–"}
+              </p>
+            </div>
+          </div>
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500 font-bold">
+            {userEmail?.charAt(0).toUpperCase()}
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto -mt-10 max-w-2xl space-y-4 px-4 pb-6">
+        {/* Progress + week lock */}
+        {activeWeek && (
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-semibold text-slate-600">Your picks this week</div>
+                <div className="text-2xl font-extrabold text-slate-900">
+                  {pickedCount}
+                  <span className="text-lg text-slate-500"> / {weekGames.length}</span>
+                </div>
+              </div>
+              <div className="text-right">
+                {isWeekComplete() ? (
+                  <span className="rounded-full bg-slate-200 px-3 py-1 text-sm font-bold text-slate-800">Week complete</span>
+                ) : weekLockTime && weekLockTime.getTime() > now.getTime() ? (
+                  <>
+                    <div className="text-xs font-semibold text-slate-600">Sunday 2 PM + MNF lock in</div>
+                    <div className="font-mono text-lg font-extrabold text-emerald-700">
+                      {countdown(weekLockTime.getTime() - now.getTime())}
                     </div>
-                  </div>
-                )}
-                {/* Countdown */}
-                {!isFinal && !isLive && (
-                  <div className="flex justify-center">
-                    <div
-                      className="
-                      font-black
-                      px-6
-                      py-4
-                      rounded-2xl
-                      border-4
-                      text-center
-                      shadow-xl
-                      max-w-md
-                      w-full
-                      "
-                      style={{
-                        background: pick
-                          ? "rgba(255,255,255,.20)"
-                          : "#fee2e2",
-                        color: pick
-                          ? "#ffffff"
-                          : "#991b1b",
-                        borderColor: pick
-                          ? "rgba(255,255,255,.45)"
-                          : "#fecaca",
-                        textShadow: pick
-                          ? "0 2px 8px rgba(0,0,0,.5)"
-                          : "none",
-                      }}
-                    >
-                      <div className="text-sm uppercase tracking-widest opacity-90">
-                        Game Start Time
-                      </div>
-                      <div className="text-xl sm:text-2xl mt-1">
-                        🕒 {formatTime(g.start_time)} MST
-                      </div>
-                      <div className="mt-3 text-sm uppercase tracking-widest opacity-90">
-                        Pick Lock Countdown
-                      </div>
-                      <div className="text-lg sm:text-xl mt-1">
-                        {getLockMessage(new Date(g.start_time), g.id)}
-                      </div>
-                    </div>
-                  </div>
+                  </>
+                ) : weekLockTime ? (
+                  <span className="rounded-full bg-amber-100 px-3 py-1 text-sm font-bold text-amber-800">
+                    🔒 Sunday & MNF locked
+                  </span>
+                ) : (
+                  <span className="text-xs font-semibold text-slate-600">Each game locks at kickoff</span>
                 )}
               </div>
             </div>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+                style={{ width: `${weekGames.length ? (pickedCount / weekGames.length) * 100 : 0}%` }}
+              />
+            </div>
+            <details className="group mt-3">
+              <summary className="flex cursor-pointer list-none items-center gap-1 text-xs font-semibold text-slate-600">
+                How picks lock <span className="transition-transform group-open:rotate-180">⌄</span>
+              </summary>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
+                <li>Thursday, Friday and Saturday games lock at their own kickoff.</li>
+                <li>Sunday games before 2:00 PM MT lock at their own kickoff.</li>
+                <li>
+                  Sunday games at or after 2:00 PM, and Monday Night, all lock when
+                  {lockGame ? ` ${lockGame.awayTeam} @ ${lockGame.homeTeam} ` : " the first of those games "}
+                  kicks off.
+                </li>
+                <li>Set your Monday Night total points before picking that game.</li>
+              </ul>
+            </details>
+          </section>
+        )}
+
+        {/* Week chips */}
+        <div ref={weekChipsRef} className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1">
+          {weekNumbers.map((week) => {
+            const wg = gamesByWeek[week] || [];
+            const done = wg.length > 0 && wg.every((g) => g.status === "Final");
+            const selected = activeWeek === week;
+            return (
+              <button
+                key={week}
+                data-selected={selected || undefined}
+                onClick={() => handleWeekSelect(week)}
+                className={`shrink-0 rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
+                  selected
+                    ? "bg-emerald-600 text-white shadow-sm"
+                    : done
+                    ? "border border-slate-200 bg-white text-slate-500"
+                    : "border border-slate-200 bg-white text-slate-800 hover:border-emerald-300"
+                }`}
+              >
+                Week {week}
+              </button>
             );
           })}
+        </div>
+
+        {/* Games */}
+        <div className="space-y-4">{weekGames.map(renderGame)}</div>
       </main>
+
+      {(() => {
+        const g = games.find((game) => game.id === selectedGameId);
+        return (
+          <GameDetailSheet
+            game={
+              g
+                ? {
+                    id: g.id,
+                    homeTeam: g.homeTeam,
+                    awayTeam: g.awayTeam,
+                    startTime: g.start_time,
+                    homeScore: g.home_score,
+                    awayScore: g.away_score,
+                    status: g.status,
+                  }
+                : null
+            }
+            live={g ? live[g.id] : undefined}
+            onClose={() => setSelectedGameId(null)}
+          />
+        );
+      })()}
     </div>
   );
 };

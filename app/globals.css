@@ -1,8 +1,19 @@
 @import "tailwindcss";
 
+/* The app is designed light-only. Without this, phones in dark mode turned
+   un-styled text near-white on our light backgrounds (hard to read). */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #dbe4f0;
+  --foreground: #0f172a;
+  color-scheme: light;
+}
+
+/* App colors ("steel blue" theme). Use as bg-page, bg-ink, text-ink, etc.
+   Change them here to re-theme every page at once. */
+@theme {
+  --color-page: #dbe4f0; /* page background */
+  --color-ink: #1e3a5f; /* headers, menu, sign-in screens */
+  --color-ink-deep: #142a47; /* darker accents on ink */
 }
 
 @theme inline {
@@ -12,15 +23,16 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Form fields: always dark text on white, even if the phone prefers dark */
+input,
+select,
+textarea {
+  color: #0f172a;
+  background-color: #ffffff;
 }
