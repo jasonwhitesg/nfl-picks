@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
+import NotificationToggle from "@/components/NotificationToggle";
 
 type SeasonStats = {
   season: number;
@@ -331,6 +332,8 @@ export default function ProfilePage() {
             </div>
           )}
         </section>
+
+        <NotificationToggle />
 
         {isAdmin && (
           <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
