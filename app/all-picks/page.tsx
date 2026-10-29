@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useLiveScores } from "@/lib/useLiveScores";
 import { periodLabel } from "@/lib/espnLive";
 import GameDetailSheet from "@/components/GameDetailSheet";
 import { useRouter } from "next/navigation";
+import { weekParticipantProfiles } from "@/lib/weekParticipants";
 
 type Game = {
   id: string;
@@ -94,16 +95,24 @@ const AllPicksPage = () => {
 
   // ADDED: State for fixed week data (all weeks)
   const [fixedWeekData, setFixedWeekData] = useState<{
+    season: number | null;
+    week: number | null;
     users: Profile[];
     picksByUser: Record<string, Pick[]>;
     games: Game[];
   }>({
+    season: null,
+    week: null,
     users: [],
     picksByUser: {},
     games: []
   });
 
   const [seasonYear, setSeasonYear] = useState(2026);
+  const weekRequest = useRef(0);
+  const activeWeekData = fixedWeekData.season === seasonYear && fixedWeekData.week === activeWeek
+    ? fixedWeekData : { users: [], picksByUser: {} as Record<string, Pick[]>, games: [] as Game[] };
+  const [weekDataError, setWeekDataError] = useState<string | null>(null);
 
   // Update now every second for real-time countdown
   useEffect(() => {
@@ -553,6 +562,7 @@ const AllPicksPage = () => {
 
   // ADDED: Get direct Week 18 data from database to fix the mismatch
   const fetchDirectWeekData = async (week: number) => {
+    const requestId = ++weekRequest.current;
     try {
       console.log('📊 Fetching direct Week 18 data from database...');
       
@@ -597,6 +607,18 @@ const AllPicksPage = () => {
 
       if (picksError) throw picksError;
 
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Sign in to see this week's players.");
+      const response = await fetch(`/api/week-participants?season=${seasonYear}&week=${week}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("Unable to load this week's players.");
+      const { userIds } = await response.json() as { userIds: string[] };
+      const { data: roster, error: rosterError } = await supabase.from("profiles")
+        .select("user_id, username, first_name, last_name, email, is_admin");
+      if (rosterError) throw rosterError;
+
       // Group picks by user
       const picksByUser: Record<string, Pick[]> = {};
       const week18Users: Profile[] = [];
@@ -635,13 +657,19 @@ const AllPicksPage = () => {
       console.log(`✅ Fetched direct Week 18 data: ${week18Users.length} users, ${mappedWeek18Games.length} games`);
       console.log(`👥 Week 18 users with picks:`, week18Users.map(u => u.username));
 
+      if (requestId !== weekRequest.current) return;
+      setWeekDataError(null);
       setFixedWeekData({
-        users: week18Users,
+        season: seasonYear,
+        week,
+        users: weekParticipantProfiles(roster || [], userIds),
         picksByUser,
         games: mappedWeek18Games
       });
 
     } catch (err) {
+      if (requestId !== weekRequest.current) return;
+      setWeekDataError("Couldn't load the full player list. Please refresh to try again.");
       console.error('Error fetching direct Week 18 data:', err);
     }
   };
@@ -1138,11 +1166,12 @@ const AllPicksPage = () => {
     if (activeWeek) {
       fetchDirectWeekData(activeWeek);
     }
-  }, [activeWeek]);
+    return () => { weekRequest.current++; };
+  }, [activeWeek, seasonYear, picks, scoreRefreshVersion]);
 
   // FIXED: Calculate user stats and best performers for ACTIVE WEEK only
   useEffect(() => {
-    if (games.length === 0 || picks.length === 0 || profiles.length === 0 || !activeWeek) return;
+    if (games.length === 0 || profiles.length === 0 || !activeWeek) return;
 
     const stats: Record<string, UserStats> = {};
     const playersWithPicks: string[] = [];
@@ -1152,11 +1181,11 @@ const AllPicksPage = () => {
     let userPicksMap: Record<string, Pick[]> = {};
     let weekProfiles: Profile[] = [];
 
-    if (fixedWeekData.users.length > 0) {
+    if (activeWeekData.users.length > 0) {
       // Use FIXED Week 18 data
-      weekGames = fixedWeekData.games;
-      userPicksMap = fixedWeekData.picksByUser;
-      weekProfiles = fixedWeekData.users;
+      weekGames = activeWeekData.games;
+      userPicksMap = activeWeekData.picksByUser;
+      weekProfiles = activeWeekData.users;
     } else {
       // Use regular data for other weeks
       weekGames = gamesByWeek[activeWeek] || [];
@@ -1174,7 +1203,7 @@ const AllPicksPage = () => {
       // For Week 18 with fixed data, we know they have picks
       // For other weeks, check if they have picks
       let hasMadePicks = false;
-      if (fixedWeekData.users.some(u => u.user_id === profile.user_id)) {
+      if (activeWeekData.users.some(u => u.user_id === profile.user_id)) {
         hasMadePicks = true;
         playersWithPicks.push(profile.user_id);
       } else {
@@ -1384,8 +1413,8 @@ const AllPicksPage = () => {
   const getUserPicksForActiveWeek = (userId: string) => {
     if (!activeWeek) return [];
     
-    if (fixedWeekData.picksByUser[userId]) {
-      return fixedWeekData.picksByUser[userId];
+    if (activeWeekData.picksByUser[userId]) {
+      return activeWeekData.picksByUser[userId];
     }
     
     return picks.filter(pick => pick.user_id === userId);
@@ -1395,8 +1424,8 @@ const AllPicksPage = () => {
   const getActiveWeekGames = () => {
     if (!activeWeek) return [];
     
-    if (fixedWeekData.games.length > 0) {
-      return fixedWeekData.games;
+    if (activeWeekData.games.length > 0) {
+      return activeWeekData.games;
     }
     
     return gamesByWeek[activeWeek] || [];
@@ -1405,8 +1434,8 @@ const AllPicksPage = () => {
   // Sort profiles - FIXED: Show ALL users who made picks
   const getSortedProfiles = () => {
     // SPECIAL HANDLING FOR WEEK 18 - Use fixed data
-    if (fixedWeekData.users.length > 0) {
-      return fixedWeekData.users.sort((a, b) => {
+    if (fixedWeekData.season === seasonYear && fixedWeekData.week === activeWeek) {
+      return [...activeWeekData.users].sort((a, b) => {
         const statsA = userStats[a.user_id] || { percentage: 0, correctPicks: 0 };
         const statsB = userStats[b.user_id] || { percentage: 0, correctPicks: 0 };
         
@@ -1554,6 +1583,7 @@ const AllPicksPage = () => {
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-5">
+        {weekDataError && <p role="alert" className="mb-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{weekDataError}</p>}
         {/* Week selector */}
         <div className="-mx-4 mb-5 flex gap-2 overflow-x-auto px-4 pb-1">
           {Object.keys(gamesByWeek).map((week) => {
