@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import axios from "axios";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { pickCurrentWeek } from "@/lib/currentWeek";
 
 const DEFAULT_SEASON = 2026;
 
@@ -104,7 +105,7 @@ async function updateScores(request: Request) {
     const season = config?.season_year ?? DEFAULT_SEASON;
 
     const { data: schedule, error: scheduleError } = await db()
-      .from("games").select("week, start_time").eq("season", season)
+      .from("games").select("week, start_time, status").eq("season", season)
       .order("start_time", { ascending: true });
     if (scheduleError) throw scheduleError;
 
@@ -112,7 +113,7 @@ async function updateScores(request: Request) {
     if (games.length === 0) {
       // Populate the season once, then select the week from actual kickoff times.
       for (let week = 1; week <= 18; week++) await refreshWeek(season, week);
-      const { data, error } = await db().from("games").select("week, start_time")
+      const { data, error } = await db().from("games").select("week, start_time, status")
         .eq("season", season).order("start_time", { ascending: true });
       if (error) throw error;
       games = data ?? [];
@@ -121,9 +122,7 @@ async function updateScores(request: Request) {
 
     const now = Date.now();
     const weeks = Array.from(new Set(games.map(game => game.week))).sort((a, b) => a - b);
-    const currentWeek = weeks.find(week =>
-      games.some(game => game.week === week && new Date(game.start_time).getTime() > now)
-    ) ?? weeks[weeks.length - 1];
+    const currentWeek = pickCurrentWeek(games, now);
 
     // An admin-triggered POST repairs every week played so far. Cron GETs stay small.
     const backfill = request.method === "POST";
@@ -148,7 +147,7 @@ async function updateScores(request: Request) {
     return NextResponse.json({ season, currentWeek, refreshed: results });
   } catch (error) {
     console.error("ESPN refresh error:", error);
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Score update failed" }, { status: 500 });
+    return NextResponse.json({ error: "Score update failed" }, { status: 500 });
   }
 }
 

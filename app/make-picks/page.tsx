@@ -7,6 +7,7 @@ import { useLiveScores } from "@/lib/useLiveScores";
 import GameDetailSheet from "@/components/GameDetailSheet";
 import PicksLogo from "@/components/PicksLogo";
 import { periodLabel } from "@/lib/espnLive";
+import { pickCurrentWeek } from "@/lib/currentWeek";
 type Game = {
   id: string;
   homeTeam: string;
@@ -168,15 +169,16 @@ const MakePicksPage = () => {
       };
     });
     setGames(mapped);
-    // Kickoff times determine the displayed week even if old statuses are stale.
-    if (!userSelectedWeek.current) {
-      const weekNumbers = Array.from(new Set(mapped.map(g => g.week))).sort((a, b) => a - b);
-      const currentWeek = weekNumbers.find(week =>
-        mapped.some(game => game.week === week && new Date(game.start_time).getTime() > Date.now())
-      ) ?? weekNumbers[weekNumbers.length - 1] ?? 1;
-      setActiveWeek(currentWeek);
-    }
+    if (!userSelectedWeek.current) setActiveWeek(pickCurrentWeek(mapped));
   };
+  // Move on as soon as the live feed shows the week's last game final.
+  useEffect(() => {
+    if (userSelectedWeek.current || activeWeek === null) return;
+    const next = pickCurrentWeek(games.map(g => ({
+      ...g, status: live[g.id]?.state === "post" ? "Final" : g.status,
+    })));
+    if (next > activeWeek) setActiveWeek(next);
+  }, [games, live, activeWeek]);
   useEffect(() => {
   if (!userId) return;
   fetchGames();

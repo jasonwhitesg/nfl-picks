@@ -7,6 +7,7 @@ import { periodLabel } from "@/lib/espnLive";
 import GameDetailSheet from "@/components/GameDetailSheet";
 import { useRouter } from "next/navigation";
 import { weekParticipantProfiles } from "@/lib/weekParticipants";
+import { pickCurrentWeek } from "@/lib/currentWeek";
 
 type Game = {
   id: string;
@@ -1123,13 +1124,8 @@ const AllPicksPage = () => {
         const { data: pickData } = await supabase.from("game_picks").select("*");
         setPicks(pickData || []);
 
-        // Use kickoff times so stale game statuses cannot hold the page on an old week.
         if (!userSelectedWeek) {
-          const weeks = Array.from(new Set(sortedGames.map(g => g.week))).sort((a, b) => a - b);
-          const currentWeek = weeks.find(week =>
-            sortedGames.some(game => game.week === week && new Date(game.startTime).getTime() > Date.now())
-          ) ?? weeks[weeks.length - 1] ?? 1;
-          setActiveWeek(currentWeek);
+          setActiveWeek(pickCurrentWeek(sortedGames.map(g => ({ ...g, start_time: g.startTime }))));
         }
 
         setLoading(false);
@@ -1532,6 +1528,15 @@ const AllPicksPage = () => {
 
   // Live scores for the week on screen (and the game whose details are open)
   const live = useLiveScores(seasonYear, activeWeek);
+
+  // Move on as soon as the live feed shows the week's last game final.
+  useEffect(() => {
+    if (userSelectedWeek || activeWeek === null) return;
+    const next = pickCurrentWeek(games.map(g => ({
+      week: g.week, start_time: g.startTime, status: live[g.id]?.state === "post" ? "Final" : g.status,
+    })));
+    if (next > activeWeek) setActiveWeek(next);
+  }, [games, live, activeWeek, userSelectedWeek]);
 
   if (loading) {
     return (
