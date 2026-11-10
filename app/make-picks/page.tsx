@@ -654,6 +654,13 @@ const getTeamStyle = (team?: string | null) => {
           )}
         </div>
 
+        {needsTotalFirst && (
+          <div className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-bold text-amber-800">
+            <span aria-hidden>👇</span>
+            Make your total points pick below before you can pick the winner.
+          </div>
+        )}
+
         {/* The two "pages": away | home */}
         <div className="relative flex">
           {side(g.awayTeam, "Away", awayScore)}
