@@ -124,10 +124,12 @@ async function updateScores(request: Request) {
     const weeks = Array.from(new Set(games.map(game => game.week))).sort((a, b) => a - b);
     const currentWeek = pickCurrentWeek(games, now);
 
-    // An admin-triggered POST repairs every week played so far. Cron GETs stay small.
+    // An admin-triggered POST repairs the entire regular-season schedule. Do not
+    // derive the weeks to refresh from stored dates: corrupt dates can make an
+    // otherwise valid week appear to be in the past and leave it permanently stale.
     const backfill = request.method === "POST";
     const results = backfill
-      ? await Promise.all(weeks.filter(week => week <= currentWeek).map(week => refreshWeek(season, week)))
+      ? await Promise.all(Array.from({ length: 18 }, (_, index) => refreshWeek(season, index + 1)))
       : [await refreshWeek(season, currentWeek)];
     const previousWeek = weeks.filter(week => week < currentWeek).at(-1);
     if (!backfill && previousWeek !== undefined) {
