@@ -104,21 +104,30 @@ async function updateScores(request: Request) {
     if (configError) throw configError;
     const season = config?.season_year ?? DEFAULT_SEASON;
 
-    const { data: schedule, error: scheduleError } = await db()
-      .from("games").select("week, start_time, status").eq("season", season)
-      .order("start_time", { ascending: true });
-    if (scheduleError) throw scheduleError;
-
-    let games = schedule ?? [];
-    if (games.length === 0) {
-      // Populate the season once, then select the week from actual kickoff times.
-      for (let week = 1; week <= 18; week++) await refreshWeek(season, week);
+    const loadSchedule = async () => {
       const { data, error } = await db().from("games").select("week, start_time, status")
         .eq("season", season).order("start_time", { ascending: true });
       if (error) throw error;
-      games = data ?? [];
+      return data ?? [];
+    };
+
+    let games = await loadSchedule();
+    if (games.length === 0) {
+      // Populate the season once, then select the week from actual kickoff times.
+      for (let week = 1; week <= 18; week++) await refreshWeek(season, week);
+      games = await loadSchedule();
     }
     if (games.length === 0) throw new Error(`No ${season} schedule found`);
+
+    // Kickoff times from before this season are bad data. Reload those weeks from
+    // ESPN first, or they look finished and the app skips ahead to a later week.
+    const seasonStart = Date.UTC(season, 7, 1);
+    const badWeeks = Array.from(new Set(games
+      .filter(game => new Date(game.start_time).getTime() < seasonStart).map(game => game.week)));
+    if (badWeeks.length > 0) {
+      await Promise.all(badWeeks.map(week => refreshWeek(season, week)));
+      games = await loadSchedule();
+    }
 
     const now = Date.now();
     const weeks = Array.from(new Set(games.map(game => game.week))).sort((a, b) => a - b);
